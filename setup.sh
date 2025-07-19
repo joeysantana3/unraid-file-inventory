@@ -40,6 +40,14 @@ MONITOR_B64_END
 base64 -d monitor_performance.sh.b64 > monitor_performance.sh && rm monitor_performance.sh.b64
 chmod +x monitor_performance.sh
 
+# Create database activity monitor script (base64 encoded)
+cat > monitor_db_activity.sh.b64 << 'DBMON_B64_END'
+IyEvYmluL2Jhc2gKIyBtb25pdG9yX2RiX2FjdGl2aXR5LnNoIC0gTW9uaXRvciBkYXRhYmFzZSB3cml0ZXMgcGVyIHNlY29uZCBhbmQgc2hvdyBsYXN0IDUgZW50cmllcwoKREJfUEFUSD0kezE6LS9tbnQvdXNlci9hcHBkYXRhL25hcy1zY2FubmVyL3NjYW5fZGF0YS9uYXNfY2F0YWxvZy5kYn0KCmlmIFsgISAtZiAiJERCX1BBVEgiIF07IHRoZW4KICAgIGVjaG8gIkRhdGFiYXNlIG5vdCBmb3VuZCBhdCAkREJfUEFUSCIKICAgIGV4aXQgMQpmaQoKcHJldl9jb3VudD0kKHNxbGl0ZTMgIiREQl9QQVRIIiAiU0VMRUNUIENPVU5UKCopIEZST00gZmlsZXMiIDI+L2Rldi9udWxsIHx8IGVjaG8gMCkKCndoaWxlIHRydWU7IGRvCiAgICBzbGVlcCA1CiAgICBjdXJyZW50X2NvdW50PSQoc3FsaXRlMyAiJERCX1BBVEgiICJTRUxFQ1QgQ09VTlQoKikgRlJPTSBmaWxlcyIgMj4vZGV2L251bGwgfHwgZWNobyAwKQogICAgZGlmZj0kKChjdXJyZW50X2NvdW50IC0gcHJldl9jb3VudCkpCiAgICByYXRlPSQoYXdrIC12IGQ9IiRkaWZmIiAnQkVHSU57cHJpbnRmICIlLjJmIiwgZC81fScpCiAgICB0aW1lc3RhbXA9JChkYXRlICcrJVktJW0tJWQgJUg6JU06JVMnKQogICAgZWNobyAiWyR0aW1lc3RhbXBdIFdyaXRlcy9zZWM6ICRyYXRlIgogICAgZWNobyAiTGFzdCA1IGVudHJpZXM6IgogICAgc3FsaXRlMyAtaGVhZGVyICIkREJfUEFUSCIgIlNFTEVDVCBkYXRldGltZShzY2FuX3RpbWUsJ3VuaXhlcG9jaCcpIEFTIHRpbWUsIHBhdGggRlJPTSBmaWxlcyBPUkRFUiBCWSBzY2FuX3RpbWUgREVTQyBMSU1JVCA1IiAyPi9kZXYvbnVsbCB8fCBlY2hvICJVbmFibGUgdG8gcmVhZCBkYXRhYmFzZSIKICAgIGVjaG8KICAgIHByZXZfY291bnQ9JGN1cnJlbnRfY291bnQKZG9uZQo=
+DBMON_B64_END
+base64 -d monitor_db_activity.sh.b64 > monitor_db_activity.sh && rm monitor_db_activity.sh.b64
+chmod +x monitor_db_activity.sh
+
+
 echo ""
 echo "✅ EXTREME PERFORMANCE SETUP COMPLETE!"
 echo ""
@@ -55,6 +63,7 @@ echo "  ./run_extreme_parallel.sh full    # Full scan with confirmation"
 echo ""
 echo "To monitor performance:"
 echo "  ./monitor_performance.sh          # Real-time system stats"
+echo "  ./monitor_db_activity.sh          # DB writes/sec monitor"
 echo ""
 echo "Expected performance:"
 echo "  - 20,000-100,000 files/second (depending on file sizes)"
