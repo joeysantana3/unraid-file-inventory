@@ -149,7 +149,7 @@ for mount, files, gb in cursor.fetchall():
     total_files += files
     total_gb += gb
 print('-' * 50)
-print(f'{'TOTAL':20} {total_files:>10,} files  {total_gb:>8.1f} GB')
+print(f'{"TOTAL":20} {total_files:>10,} files  {total_gb:>8.1f} GB')
 "
         
         sleep 5
