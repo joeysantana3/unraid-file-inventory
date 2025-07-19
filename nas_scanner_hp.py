@@ -96,6 +96,14 @@ class DatabaseManager:
                     end_time REAL
                 )
             ''')
+
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS scanned_dirs (
+                    path TEXT PRIMARY KEY,
+                    mount_point TEXT,
+                    scan_time REAL
+                ) WITHOUT ROWID
+            ''')
             conn.commit()
     
     def save_files(self, file_batch):
@@ -118,9 +126,34 @@ class DatabaseManager:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ''', data)
                 conn.commit()
-                
+
         except Exception as e:
             self.logger.error(f"Database save failed: {e}")
+
+    def mark_dir_scanned(self, path, mount_point):
+        """Record that a directory has been scanned"""
+        try:
+            with database_connection(self.db_path) as conn:
+                conn.execute(
+                    'INSERT OR REPLACE INTO scanned_dirs (path, mount_point, scan_time) VALUES (?, ?, ?)',
+                    (path, mount_point, time.time())
+                )
+                conn.commit()
+        except Exception as e:
+            self.logger.error(f"Failed to mark directory scanned: {e}")
+
+    def get_scanned_dirs(self, mount_point):
+        """Get set of directories already scanned for a mount"""
+        try:
+            with database_connection(self.db_path) as conn:
+                rows = conn.execute(
+                    'SELECT path FROM scanned_dirs WHERE mount_point=?',
+                    (mount_point,)
+                )
+                return {row[0] for row in rows}
+        except Exception as e:
+            self.logger.error(f"Failed to fetch scanned directories: {e}")
+            return set()
 
 def calculate_checksum(filepath, size):
     """Calculate file checksum efficiently"""
@@ -194,8 +227,8 @@ def scan_directory(args):
                 
     except Exception as e:
         logging.getLogger(__name__).warning(f"Skipping directory {path}: {e}")
-    
-    return files
+
+    return path, files
 
 class Scanner:
     """Main scanner class - simplified and focused"""
@@ -220,8 +253,8 @@ class Scanner:
         self.logger.info("Shutdown signal received")
         self.shutdown = True
     
-    def _collect_directories(self, root_path):
-        """Collect all directories to scan"""
+    def _collect_directories(self, root_path, mount_name):
+        """Collect all directories to scan, skipping already scanned ones"""
         directories = []
         
         try:
@@ -232,7 +265,12 @@ class Scanner:
                 
         except Exception as e:
             self.logger.error(f"Failed to walk directory tree: {e}")
-            
+
+        # Filter out directories that were scanned in a previous run
+        scanned = self.db.get_scanned_dirs(mount_name)
+        if scanned:
+            directories = [d for d in directories if d not in scanned]
+
         return directories
     
     def scan(self, mount_path, mount_name):
@@ -247,7 +285,7 @@ class Scanner:
         
         # Collect all directories first
         self.logger.info("Collecting directories...")
-        directories = self._collect_directories(mount_path)
+        directories = self._collect_directories(mount_path, mount_name)
         
         if self.shutdown:
             return
@@ -258,26 +296,36 @@ class Scanner:
         work_items = [(d, mount_name) for d in directories]
         
         # Process with worker pool
+        # Stream results back from worker processes instead of waiting for all
+        # tasks to finish. ``Pool.map`` blocks until every directory has been
+        # scanned which means no results are written to the database until the
+        # very end of the scan. If the process is interrupted all collected
+        # results would be lost. ``imap_unordered`` allows us to consume each
+        # result as soon as it is ready and save it immediately.
         with Pool(processes=self.num_workers) as pool:
             try:
-                results = pool.map(scan_directory, work_items)
-                
-                # Process results in batches
                 batch = []
-                for file_list in results:
+                dirs_to_mark = []
+                for dir_path, file_list in pool.imap_unordered(scan_directory, work_items):
                     if self.shutdown:
                         break
-                        
+
                     batch.extend(file_list)
-                    
+                    dirs_to_mark.append(dir_path)
+
                     if len(batch) >= BATCH_SIZE:
                         self._save_batch(batch)
+                        for d in dirs_to_mark:
+                            self.db.mark_dir_scanned(d, mount_name)
                         batch = []
-                
-                # Save final batch
+                        dirs_to_mark = []
+
+                # Save any remaining results
                 if batch:
                     self._save_batch(batch)
-                    
+                    for d in dirs_to_mark:
+                        self.db.mark_dir_scanned(d, mount_name)
+
             except KeyboardInterrupt:
                 self.logger.info("Scan interrupted by user")
                 pool.terminate()
