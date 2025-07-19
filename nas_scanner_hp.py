@@ -111,36 +111,57 @@ class DatabaseManager:
         if not file_batch:
             return
             
-        try:
-            with database_connection(self.db_path) as conn:
-                data = [(f['path'], f['size'], f['mtime'], f.get('checksum'), 
-                        f['mount_point'], f.get('file_type', 'other'), 
-                        f['extension'], f['scan_time']) 
-                       for f in file_batch]
-                
-                # Use executemany to efficiently insert or update multiple file records in a single database transaction.
-                # This reduces the number of round-trips to the database and improves performance for large batches.
-                conn.executemany('''
-                    INSERT OR REPLACE INTO files 
-                    (path, size, mtime, checksum, mount_point, file_type, extension, scan_time)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''', data)
-                conn.commit()
+        attempts = 0
+        while attempts < 5:
+            try:
+                with database_connection(self.db_path) as conn:
+                    data = [(f['path'], f['size'], f['mtime'], f.get('checksum'),
+                            f['mount_point'], f.get('file_type', 'other'),
+                            f['extension'], f['scan_time'])
+                           for f in file_batch]
 
-        except Exception as e:
-            self.logger.error(f"Database save failed: {e}")
+                    conn.executemany('''
+                        INSERT OR REPLACE INTO files
+                        (path, size, mtime, checksum, mount_point, file_type, extension, scan_time)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', data)
+                    conn.commit()
+                return
+            except sqlite3.OperationalError as e:
+                if 'locked' in str(e).lower():
+                    attempts += 1
+                    time.sleep(0.1 * attempts)
+                    continue
+                self.logger.error(f"Database save failed: {e}")
+                return
+            except Exception as e:
+                self.logger.error(f"Database save failed: {e}")
+                return
+        self.logger.error("Database save failed after retries")
 
     def mark_dir_scanned(self, path, mount_point):
         """Record that a directory has been scanned"""
-        try:
-            with database_connection(self.db_path) as conn:
-                conn.execute(
-                    'INSERT OR REPLACE INTO scanned_dirs (path, mount_point, scan_time) VALUES (?, ?, ?)',
-                    (path, mount_point, time.time())
-                )
-                conn.commit()
-        except Exception as e:
-            self.logger.error(f"Failed to mark directory scanned: {e}")
+        attempts = 0
+        while attempts < 5:
+            try:
+                with database_connection(self.db_path) as conn:
+                    conn.execute(
+                        'INSERT OR REPLACE INTO scanned_dirs (path, mount_point, scan_time) VALUES (?, ?, ?)',
+                        (path, mount_point, time.time())
+                    )
+                    conn.commit()
+                return
+            except sqlite3.OperationalError as e:
+                if 'locked' in str(e).lower():
+                    attempts += 1
+                    time.sleep(0.1 * attempts)
+                    continue
+                self.logger.error(f"Failed to mark directory scanned: {e}")
+                return
+            except Exception as e:
+                self.logger.error(f"Failed to mark directory scanned: {e}")
+                return
+        self.logger.error("Failed to mark directory scanned after retries")
 
     def get_scanned_dirs(self, mount_point):
         """Get set of directories already scanned for a mount"""
@@ -253,25 +274,18 @@ class Scanner:
         self.logger.info("Shutdown signal received")
         self.shutdown = True
     
-    def _collect_directories(self, root_path, mount_name):
-        """Collect all directories to scan, skipping already scanned ones"""
-        directories = []
-        
+    def _directory_generator(self, root_path, mount_name):
+        """Yield directories to scan, skipping already scanned ones"""
+        scanned = self.db.get_scanned_dirs(mount_name)
+
         try:
             for root, dirs, files in os.walk(root_path):
                 if self.shutdown:
                     break
-                directories.append(root)
-                
+                if root not in scanned:
+                    yield root
         except Exception as e:
             self.logger.error(f"Failed to walk directory tree: {e}")
-
-        # Filter out directories that were scanned in a previous run
-        scanned = self.db.get_scanned_dirs(mount_name)
-        if scanned:
-            directories = [d for d in directories if d not in scanned]
-
-        return directories
     
     def scan(self, mount_path, mount_name):
         """Main scan method - simplified approach"""
@@ -283,17 +297,12 @@ class Scanner:
         self.logger.info(f"Starting scan of {mount_name} at {mount_path}")
         self.logger.info(f"Using {self.num_workers} workers")
         
-        # Collect all directories first
+        # Prepare directory generator
         self.logger.info("Collecting directories...")
-        directories = self._collect_directories(mount_path, mount_name)
-        
+        directory_iter = ((d, mount_name) for d in self._directory_generator(mount_path, mount_name))
+
         if self.shutdown:
             return
-            
-        self.logger.info(f"Found {len(directories)} directories to scan")
-        
-        # Prepare work items
-        work_items = [(d, mount_name) for d in directories]
         
         # Process with worker pool
         # Stream results back from worker processes instead of waiting for all
@@ -306,7 +315,7 @@ class Scanner:
             try:
                 batch = []
                 dirs_to_mark = []
-                for dir_path, file_list in pool.imap_unordered(scan_directory, work_items):
+                for dir_path, file_list in pool.imap_unordered(scan_directory, directory_iter):
                     if self.shutdown:
                         break
 
@@ -325,6 +334,10 @@ class Scanner:
                     self._save_batch(batch)
                     for d in dirs_to_mark:
                         self.db.mark_dir_scanned(d, mount_name)
+
+                if self.shutdown:
+                    pool.terminate()
+                    pool.join()
 
             except KeyboardInterrupt:
                 self.logger.info("Scan interrupted by user")

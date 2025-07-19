@@ -18,7 +18,9 @@ print_status() {
 start_hp_container() {
     local mount_path=$1
     local mount_name=$2
-    local container_name="nas-hp-${mount_name}"
+    # Sanitize container name to avoid invalid characters
+    local safe_name=$(echo "$mount_name" | tr -c 'a-zA-Z0-9_.-' '_')
+    local container_name="nas-hp-${safe_name}"
     
     print_status "Starting high-performance scan of $mount_name"
     
@@ -83,7 +85,6 @@ main() {
     done
     
     print_status "Found ${#MOUNTS[@]} mounts to scan"
-    # INSERT_YOUR_CODE
     read -p "Proceed with scanning? (y to continue, anything else to quit): " confirm
     if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
         echo "Aborted by user."
