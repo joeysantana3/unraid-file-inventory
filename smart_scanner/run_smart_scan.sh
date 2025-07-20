@@ -1,0 +1,98 @@
+#!/bin/bash
+# Smart Scanner Orchestration Script - Container-based
+
+# Configuration
+SMART_SCAN_DIR="/mnt/user/appdata/nas-scanner-smart"
+SMART_DB_PATH="$SMART_SCAN_DIR/smart_catalog.db"
+WORKER_IMAGE_NAME="nas-scanner-hp:latest"
+SMART_IMAGE_NAME="nas-scanner-smart:latest"
+
+{{ ... }}
+
+setup_smart_scanner() {
+    print_status "Setting up Smart Scanner environment..."
+    
+    # Create directory structure
+    mkdir -p "$SMART_SCAN_DIR"
+    cd "$SMART_SCAN_DIR"
+    
+    # Copy smart scanner script and create Dockerfile
+    if [ ! -f "smart_scanner.py" ]; then
+        # Get the script directory (where this script is located)
+        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+        
+        cp "$SCRIPT_DIR/smart_scanner.py" .
+        cp "$REPO_ROOT/mono_scanner/nas_scanner_hp.py" .
+        
+        # Create Dockerfile for smart scanner
+        cat > Dockerfile.smart << 'EOF'
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y \
+    procps \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY smart_scanner.py ./
+COPY nas_scanner_hp.py ./
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+CMD ["python", "smart_scanner.py"]
+EOF
+        
+        # Build smart scanner image
+        print_status "Building smart scanner image..."
+        docker build -f Dockerfile.smart -t "$SMART_IMAGE_NAME" .
+    fi
+    
+    # Ensure worker Docker image exists
+    if ! docker image inspect "$WORKER_IMAGE_NAME" >/dev/null 2>&1; then
+        print_error "Worker Docker image $WORKER_IMAGE_NAME not found. Please build it first:"
+        echo "  cd \"$(dirname "$(dirname "$(realpath "$0")")")/mono_scanner\""
+        echo "  docker build -t $WORKER_IMAGE_NAME ."
+        exit 1
+    fi
+    
+    print_success "Smart Scanner setup complete"
+}
+
+{{ ... }}
+
+start_smart_scan() {
+    local mount_path="$1"
+    local mount_name="$2"
+    shift 2
+    
+    if [ -z "$mount_path" ] || [ -z "$mount_name" ]; then
+        print_error "Mount path and name are required"
+        show_usage
+        exit 1
+    fi
+    
+    if [ ! -d "$mount_path" ]; then
+        print_error "Mount path does not exist: $mount_path"
+        exit 1
+    fi
+    
+    print_status "Starting smart scan of $mount_path"
+    print_status "Mount name: $mount_name"
+    print_status "Database: $SMART_DB_PATH"
+    print_status "Additional args: $*"
+    
+    # Run the smart scanner in a container
+    docker run --rm -it \
+        -v "$mount_path:$mount_path:ro" \
+        -v "$SMART_SCAN_DIR:/data" \
+        -v /var/run/docker.sock:/var/run/docker.sock \
+        --network host \
+        "$SMART_IMAGE_NAME" \
+        python smart_scanner.py "$mount_path" "$mount_name" \
+        --db "/data/smart_catalog.db" \
+        --image "$WORKER_IMAGE_NAME" \
+        "$@"
+}
+
+{{ ... }}
