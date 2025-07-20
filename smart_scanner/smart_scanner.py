@@ -49,26 +49,35 @@ class DirectoryAnalyzer:
                 return self._size_cache[path]
         
         # For very large directories, try a faster estimation first
+        self.logger.info(f"Running fast file count check for: {path}")
         try:
             # Quick file count check - if too many files, skip detailed analysis
             count_result = subprocess.run(
-                ['find', path, '-type', 'f', '|', 'wc', '-l'], 
-                shell=True,
+                ['sh', '-c', f'find "{path}" -type f | wc -l'], 
                 capture_output=True, 
                 text=True, 
-                timeout=60  # 1 minute timeout for file count
+                timeout=120  # 2 minute timeout for file count
             )
             
             if count_result.returncode == 0:
                 file_count = int(count_result.stdout.strip())
-                # If more than 1M files, assume it's a large chunk and skip du
-                if file_count > 1000000:
+                self.logger.info(f"File count result: {file_count:,} files in {path}")
+                # If more than 100K files, assume it's a large chunk and skip du
+                if file_count > 100000:  # Lowered threshold
                     self.logger.info(f"Large directory detected ({file_count:,} files): {path} - treating as single chunk")
                     with self._lock:
                         self._size_cache[path] = CHUNK_SIZE_BYTES + 1
                     return CHUNK_SIZE_BYTES + 1
-        except:
-            pass  # Fall back to du if file count fails
+            else:
+                self.logger.warning(f"File count failed for {path}: {count_result.stderr}")
+        except Exception as e:
+            self.logger.warning(f"File count check failed for {path}: {e}")
+            # For root directories like /mnt/user/Archive, assume they're large
+            if '/mnt/user/' in path and path.count('/') <= 3:
+                self.logger.info(f"Root mount directory detected: {path} - treating as single chunk")
+                with self._lock:
+                    self._size_cache[path] = CHUNK_SIZE_BYTES + 1
+                return CHUNK_SIZE_BYTES + 1
         
         try:
             # Use du command for size calculation
