@@ -28,29 +28,28 @@ setup_smart_scanner() {
     cd "$SMART_SCAN_DIR"
     
     # Copy smart scanner script and create Dockerfile
-    if [ ! -f "smart_scanner.py" ]; then
-        # Get the script directory (where this script is located)
-        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-        REPO_ROOT="$(dirname "$SCRIPT_DIR")"
-        
-        print_status "Copying files from $SCRIPT_DIR and $REPO_ROOT"
-        
-        # Ensure source files exist before copying
-        if [ ! -f "$SCRIPT_DIR/smart_scanner.py" ]; then
-            print_error "smart_scanner.py not found at $SCRIPT_DIR/smart_scanner.py"
-            exit 1
-        fi
-        
-        if [ ! -f "$REPO_ROOT/mono_scanner/nas_scanner_hp.py" ]; then
-            print_error "nas_scanner_hp.py not found at $REPO_ROOT/mono_scanner/nas_scanner_hp.py"
-            exit 1
-        fi
-        
-        cp "$SCRIPT_DIR/smart_scanner.py" .
-        cp "$REPO_ROOT/mono_scanner/nas_scanner_hp.py" .
-        
-        # Create Dockerfile for smart scanner
-        cat > Dockerfile.smart << 'EOF'
+    # Get the script directory (where this script is located)
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+    
+    print_status "Copying files from $SCRIPT_DIR and $REPO_ROOT"
+    
+    # Ensure source files exist before copying
+    if [ ! -f "$SCRIPT_DIR/smart_scanner.py" ]; then
+        print_error "smart_scanner.py not found at $SCRIPT_DIR/smart_scanner.py"
+        exit 1
+    fi
+    
+    if [ ! -f "$REPO_ROOT/mono_scanner/nas_scanner_hp.py" ]; then
+        print_error "nas_scanner_hp.py not found at $REPO_ROOT/mono_scanner/nas_scanner_hp.py"
+        exit 1
+    fi
+    
+    cp "$SCRIPT_DIR/smart_scanner.py" .
+    cp "$REPO_ROOT/mono_scanner/nas_scanner_hp.py" .
+    
+    # Create Dockerfile for smart scanner
+    cat > Dockerfile.smart << 'EOF'
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y \
@@ -67,11 +66,10 @@ ENV PYTHONDONTWRITEBYTECODE=1
 
 CMD ["python", "smart_scanner.py"]
 EOF
-        
-        # Build smart scanner image
-        print_status "Building smart scanner image..."
-        docker build -f Dockerfile.smart -t "$SMART_IMAGE_NAME" .
-    fi
+    
+    # Build smart scanner image
+    print_status "Building smart scanner image..."
+    docker build -f Dockerfile.smart -t "$SMART_IMAGE_NAME" --no-cache .
     
     # Ensure worker Docker image exists
     if ! docker image inspect "$WORKER_IMAGE_NAME" >/dev/null 2>&1; then
@@ -111,6 +109,7 @@ show_usage() {
     echo "  --chunk-size N        Chunk size in GB (default: 100)"
     echo "  --max-containers N    Maximum concurrent containers (default: 8)"
     echo "  --image IMAGE         Docker image to use (default: nas-scanner-hp:latest)"
+    echo "  --analysis-timeout N  Analysis timeout in seconds (default: 3600)"
 }
 
 start_smart_scan() {
