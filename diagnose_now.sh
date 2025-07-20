@@ -10,9 +10,13 @@ DB_PATH="/mnt/database/nas_catalog.db"
 if [ -f "$DB_PATH" ]; then
     echo "Database size: $(du -h "$DB_PATH" | cut -f1)"
     echo "Last modified: $(stat -c %y "$DB_PATH")"
-    
+    if [ -f /usr/bin/sqlite3 ]; then
+        echo "sqlite3 found"
+    else
+        echo "sqlite3 not found"
+    fi
     echo "Testing database access..."
-    if timeout 5 sqlite3 "$DB_PATH" "SELECT COUNT(*) as files FROM files" 2>/dev/null; then
+    if timeout 5 /usr/bin/sqlite3 "$DB_PATH" "SELECT COUNT(*) as files FROM files" 2>/dev/null; then
         echo "✅ Database accessible"
     else
         echo "❌ Database not accessible or timeout"
