@@ -4,22 +4,22 @@ echo "=== DOCKER CONTAINER DIAGNOSTICS (HOST) ==="
 echo "Time: $(date)"
 echo ""
 
-echo "1. CONTAINER STATUS:"
+echo "CONTAINER STATUS:"
 docker ps --filter "name=nas-hp-" --format "table {{.Names}}\t{{.Status}}\t{{.RunningFor}}"
 echo ""
 
-echo "2. CONTAINER CPU/MEMORY (last 10 seconds):"
+echo "CONTAINER CPU/MEMORY (last 10 seconds):"
 docker stats --no-stream $(docker ps --filter "name=nas-hp-" -q) 2>/dev/null
 echo ""
 
-echo "3. RECENT CONTAINER LOGS (last 3 lines each):"
+echo "RECENT CONTAINER LOGS (last 3 lines each):"
 docker ps --filter "name=nas-hp-" --format "{{.Names}}" | while read container; do
     echo "--- $container ---"
     docker logs --tail 3 "$container" 2>&1 | sed 's/^/  /'
 done
 echo ""
 
-echo "4. MOUNT POINT QUICK CHECK:"
+echo "MOUNT POINT QUICK CHECK:"
 for mount in /mnt/user/Movies /mnt/user/Music /mnt/user/Photos; do
     if [ -d "$mount" ]; then
         echo -n "$(basename $mount): "
@@ -30,6 +30,23 @@ for mount in /mnt/user/Movies /mnt/user/Music /mnt/user/Photos; do
         fi
     fi
 done
+echo ""
+
+echo "DATABASE STATUS:"
+DB_PATH="/mnt/user/appdata/nas-scanner/scan_data/nas_catalog.db"
+if [ -f "$DB_PATH" ]; then
+    echo "Database size: $(du -h "$DB_PATH" | cut -f1)"
+    echo "Last modified: $(stat -c %y "$DB_PATH")"
+    
+    echo "Testing database access..."
+    if timeout 5 sqlite3 "$DB_PATH" "SELECT COUNT(*) as files FROM files" 2>/dev/null; then
+        echo "✅ Database accessible"
+    else
+        echo "❌ Database not accessible or timeout"
+    fi
+else
+    echo "❌ Database file not found"
+fi
 echo ""
 
 echo "=== SYSTEM DIAGNOSTICS (CONTAINER) ==="
