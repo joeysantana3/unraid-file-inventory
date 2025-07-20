@@ -34,5 +34,4 @@ echo ""
 
 
 echo "=== SYSTEM DIAGNOSTICS (CONTAINER) ==="
-docker exec -it -v /mnt/user/appdata/nas-scanner/scan_data/nas_catalog.db:/mnt/database/nas_catalog.db:ro \
- -v /mnt/database:/mnt/database:ro nas_diag /usr/local/bin/diagnose_now.sh
+docker exec -it nas_diag /usr/local/bin/diagnose_now.sh

@@ -4,6 +4,7 @@ docker kill nas_diag
 docker rm nas_diag
 
 docker run -d --name nas_diag \
+  -v /mnt/user/appdata/nas-scanner/scan_data/nas_catalog.db:/mnt/database/nas_catalog.db:ro \
   -v /mnt/user/appdata/nas-scanner/scan_data:/mnt/user/appdata/nas-scanner/scan_data:ro \
   --pid=host \
   --cap-add SYS_PTRACE \
