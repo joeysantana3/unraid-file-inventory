@@ -15,6 +15,8 @@ from pathlib import Path
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+import signal
+from typing import Dict, List, Optional, Tuple
 
 # Configuration
 CHUNK_SIZE_GB = 100
@@ -41,30 +43,39 @@ class DirectoryAnalyzer:
         self._size_cache = {}
         self._lock = threading.Lock()
         self.analysis_timeout = analysis_timeout
+        self._progress_counter = 0
+        self._analysis_start_time = None
     
-    def get_directory_size(self, path):
-        """Get directory size with caching"""
+    def get_directory_size(self, path, show_progress=True):
+        """Get directory size with caching and progress logging"""
         with self._lock:
             if path in self._size_cache:
+                if show_progress:
+                    self.logger.info(f"Using cached size for: {path} ({self._size_cache[path] / 1024**3:.2f} GB)")
                 return self._size_cache[path]
         
         # For very large directories, try a faster estimation first
-        self.logger.info(f"Running fast file count check for: {path}")
+        if show_progress:
+            self.logger.info(f"[{self._get_progress_indicator()}] Running fast file count check for: {path}")
         try:
             # Quick file count check - if too many files, skip detailed analysis
+            count_start = time.time()
             count_result = subprocess.run(
                 ['sh', '-c', f'find "{path}" -type f | wc -l'], 
                 capture_output=True, 
                 text=True, 
                 timeout=120  # 2 minute timeout for file count
             )
+            count_elapsed = time.time() - count_start
             
             if count_result.returncode == 0:
                 file_count = int(count_result.stdout.strip())
-                self.logger.info(f"File count result: {file_count:,} files in {path}")
-                # If more than 100K files, assume it's a large chunk and skip du
-                if file_count > 100000:  # Lowered threshold
-                    self.logger.info(f"Large directory detected ({file_count:,} files): {path} - treating as single chunk")
+                if show_progress:
+                    self.logger.info(f"File count result: {file_count:,} files in {path} (took {count_elapsed:.1f}s)")
+                # If more than 50K files, assume it's a large chunk and skip du
+                if file_count > 50000:  # Further lowered threshold for faster processing
+                    if show_progress:
+                        self.logger.info(f"Large directory detected ({file_count:,} files): {path} - treating as oversized chunk")
                     with self._lock:
                         self._size_cache[path] = CHUNK_SIZE_BYTES + 1
                     return CHUNK_SIZE_BYTES + 1
@@ -80,17 +91,50 @@ class DirectoryAnalyzer:
                 return CHUNK_SIZE_BYTES + 1
         
         try:
-            # Use du command for size calculation
-            self.logger.info(f"Analyzing directory size: {path}")
+            # Use du command for size calculation with progress updates
+            if show_progress:
+                self.logger.info(f"[{self._get_progress_indicator()}] Starting du analysis for: {path} (timeout: {self.analysis_timeout//60}min)")
+            
+            du_start = time.time()
+            # Try faster methods first before falling back to du
+            # Method 1: Use find with size calculation (faster for many small files)
+            try:
+                find_result = subprocess.run(
+                    ['find', path, '-type', 'f', '-printf', '%s\n'],
+                    capture_output=True,
+                    text=True,
+                    timeout=min(300, self.analysis_timeout // 4)  # Try find for max 5min or 1/4 of timeout
+                )
+                
+                if find_result.returncode == 0 and find_result.stdout.strip():
+                    # Sum up file sizes from find output
+                    sizes = [int(s) for s in find_result.stdout.strip().split('\n') if s.isdigit()]
+                    if sizes:
+                        total_size = sum(sizes)
+                        find_elapsed = time.time() - du_start
+                        if show_progress:
+                            self.logger.info(f"[{self._get_progress_indicator()}] FAST: find method completed for {path} = {total_size / 1024**3:.2f} GB (took {find_elapsed:.1f}s, {len(sizes):,} files)")
+                        with self._lock:
+                            self._size_cache[path] = total_size
+                        return total_size
+            except (subprocess.TimeoutExpired, subprocess.CalledProcessError, ValueError):
+                # Fall back to du method
+                if show_progress:
+                    self.logger.info(f"[{self._get_progress_indicator()}] find method failed/timed out, falling back to du for: {path}")
+            
+            # Method 2: Use du as fallback (slower but more reliable)
             result = subprocess.run(
-                ['du', '-sb', path], 
+                ['du', '-sb', '--max-depth=0', path], 
                 capture_output=True, 
                 text=True, 
                 timeout=self.analysis_timeout  # Use configurable timeout
             )
+            du_elapsed = time.time() - du_start
             
             if result.returncode == 0:
                 size = int(result.stdout.split()[0])
+                if show_progress:
+                    self.logger.info(f"[{self._get_progress_indicator()}] Size analysis complete: {path} = {size / 1024**3:.2f} GB (took {du_elapsed:.1f}s)")
                 with self._lock:
                     self._size_cache[path] = size
                 return size
@@ -99,22 +143,37 @@ class DirectoryAnalyzer:
                 return 0
                 
         except subprocess.TimeoutExpired:
-            self.logger.warning(f"Timeout getting size for {path} after {self.analysis_timeout} seconds")
+            if show_progress:
+                self.logger.warning(f"[{self._get_progress_indicator()}] TIMEOUT: Size analysis for {path} exceeded {self.analysis_timeout//60} minutes - treating as oversized chunk")
             # For very large directories that timeout, assume they're larger than chunk size
             # This will cause them to be processed as single chunks
+            with self._lock:
+                self._size_cache[path] = CHUNK_SIZE_BYTES + 1
             return CHUNK_SIZE_BYTES + 1
         except Exception as e:
-            self.logger.error(f"Error getting size for {path}: {e}")
+            if show_progress:
+                self.logger.error(f"[{self._get_progress_indicator()}] Error getting size for {path}: {e}")
             return 0
     
+    def _get_progress_indicator(self):
+        """Get a progress indicator for logging"""
+        with self._lock:
+            self._progress_counter += 1
+            if self._analysis_start_time:
+                elapsed = time.time() - self._analysis_start_time
+                return f"{self._progress_counter:3d} | {elapsed//60:02.0f}:{elapsed%60:02.0f}"
+            return f"{self._progress_counter:3d}"
+    
     def find_optimal_chunks(self, root_path, mount_name):
-        """Find optimal directory chunks for scanning"""
+        """Find optimal directory chunks for scanning with parallel analysis"""
         chunks = []
+        self._analysis_start_time = time.time()
+        self._progress_counter = 0
         
         def analyze_directory(dir_path, depth=0):
             """Recursively analyze directory structure"""
             try:
-                # For root mount points, skip size analysis and go straight to subdirectories
+                # For root mount points, use parallel analysis of subdirectories
                 if depth == 0 and '/mnt/user/' in dir_path:
                     self.logger.info(f"Root mount point detected: {dir_path} - analyzing subdirectories for optimal chunking")
                     try:
@@ -122,10 +181,11 @@ class DirectoryAnalyzer:
                                  if os.path.isdir(os.path.join(dir_path, d)) and not d.startswith('.')]
                         
                         if subdirs:
-                            self.logger.info(f"Found {len(subdirs)} subdirectories in {dir_path}")
-                            for subdir in subdirs:
-                                subdir_path = os.path.join(dir_path, subdir)
-                                analyze_directory(subdir_path, depth + 1)
+                            self.logger.info(f"Found {len(subdirs)} subdirectories in {dir_path} - starting parallel analysis")
+                            
+                            # Analyze subdirectories in parallel for faster processing
+                            subdir_paths = [os.path.join(dir_path, subdir) for subdir in subdirs]
+                            self._analyze_directories_parallel(subdir_paths, mount_name, chunks, depth + 1)
                             return
                         else:
                             self.logger.warning(f"No subdirectories found in {dir_path} - treating as single chunk")
@@ -135,19 +195,20 @@ class DirectoryAnalyzer:
                         # Fall through to normal analysis
                 
                 # Get size of current directory (for non-root or fallback cases)
-                dir_size = self.get_directory_size(dir_path)
+                dir_size = self.get_directory_size(dir_path, show_progress=True)
                 
-                self.logger.info(f"{'  ' * depth}Analyzing {dir_path}: {dir_size / 1024**3:.2f} GB")
+                self.logger.info(f"{'  ' * depth}[{self._get_progress_indicator()}] Analysis result: {dir_path} = {dir_size / 1024**3:.2f} GB")
                 
                 # If directory is small enough or we can't subdivide further, add as chunk
                 if dir_size <= CHUNK_SIZE_BYTES:
-                    chunks.append({
+                    chunk = {
                         'path': dir_path,
                         'size_gb': dir_size / 1024**3,
                         'mount_name': mount_name,
                         'depth': depth
-                    })
-                    self.logger.info(f"{'  ' * depth}✓ Added chunk: {dir_path} ({dir_size / 1024**3:.2f} GB)")
+                    }
+                    chunks.append(chunk)
+                    self.logger.info(f"{'  ' * depth}✓ [CHUNK {len(chunks)}] Added: {dir_path} ({dir_size / 1024**3:.2f} GB)")
                     return
                 
                 # Try to subdivide large directories
@@ -171,14 +232,15 @@ class DirectoryAnalyzer:
                 
                 # If no subdirectories, add current directory as chunk
                 if not subdirs:
-                    chunks.append({
+                    chunk = {
                         'path': dir_path,
                         'size_gb': dir_size / 1024**3,
                         'mount_name': mount_name,
                         'depth': depth,
                         'note': 'Leaf directory'
-                    })
-                    self.logger.info(f"{'  ' * depth}✓ Added leaf chunk: {dir_path} ({dir_size / 1024**3:.2f} GB)")
+                    }
+                    chunks.append(chunk)
+                    self.logger.info(f"{'  ' * depth}✓ [CHUNK {len(chunks)}] Added leaf: {dir_path} ({dir_size / 1024**3:.2f} GB)")
                     return
                 
                 # Recursively analyze subdirectories
@@ -188,21 +250,89 @@ class DirectoryAnalyzer:
             except Exception as e:
                 self.logger.error(f"Error analyzing {dir_path}: {e}")
                 # Add as chunk anyway
-                chunks.append({
+                chunk = {
                     'path': dir_path,
                     'size_gb': 0,
                     'mount_name': mount_name,
                     'depth': depth,
                     'note': f'Error: {str(e)}'
-                })
+                }
+                chunks.append(chunk)
+                self.logger.error(f"[CHUNK {len(chunks)}] Added error chunk: {dir_path}")
         
-        self.logger.info(f"Starting analysis of {root_path}")
+        self.logger.info(f"Starting comprehensive analysis of {root_path}")
         analyze_directory(root_path)
+        
+        total_analysis_time = time.time() - self._analysis_start_time
+        self.logger.info(f"Analysis complete! Found {len(chunks)} chunks in {total_analysis_time//60:.0f}m {total_analysis_time%60:.0f}s")
         
         # Sort chunks by size (largest first) for better load balancing
         chunks.sort(key=lambda x: x['size_gb'], reverse=True)
         
         return chunks
+    
+    def _analyze_directories_parallel(self, dir_paths, mount_name, chunks, depth):
+        """Analyze multiple directories in parallel for faster processing"""
+        self.logger.info(f"Starting parallel analysis of {len(dir_paths)} directories...")
+        
+        def analyze_single(dir_path):
+            """Analyze a single directory and return chunk info"""
+            try:
+                dir_size = self.get_directory_size(dir_path, show_progress=True)
+                
+                # If small enough, return as chunk
+                if dir_size <= CHUNK_SIZE_BYTES:
+                    return {
+                        'path': dir_path,
+                        'size_gb': dir_size / 1024**3,
+                        'mount_name': mount_name,
+                        'depth': depth,
+                        'note': 'Parallel analysis'
+                    }
+                else:
+                    # For large directories, we'll need recursive analysis later
+                    # For now, just mark them for single-chunk processing
+                    self.logger.info(f"Large directory found: {dir_path} ({dir_size / 1024**3:.2f} GB) - will process as single chunk")
+                    return {
+                        'path': dir_path,
+                        'size_gb': dir_size / 1024**3,
+                        'mount_name': mount_name,
+                        'depth': depth,
+                        'note': 'Large directory - single chunk'
+                    }
+            except Exception as e:
+                self.logger.error(f"Error analyzing {dir_path}: {e}")
+                return {
+                    'path': dir_path,
+                    'size_gb': 0,
+                    'mount_name': mount_name,
+                    'depth': depth,
+                    'note': f'Analysis error: {str(e)}'
+                }
+        
+        # Use ThreadPoolExecutor for parallel directory analysis
+        with ThreadPoolExecutor(max_workers=min(8, len(dir_paths))) as executor:
+            future_to_path = {executor.submit(analyze_single, path): path for path in dir_paths}
+            
+            for future in as_completed(future_to_path):
+                path = future_to_path[future]
+                try:
+                    chunk = future.result()
+                    if chunk:
+                        chunks.append(chunk)
+                        self.logger.info(f"✓ [CHUNK {len(chunks)}] Parallel result: {chunk['path']} ({chunk['size_gb']:.2f} GB)")
+                except Exception as e:
+                    self.logger.error(f"Failed to analyze {path}: {e}")
+                    # Add a fallback chunk
+                    chunks.append({
+                        'path': path,
+                        'size_gb': 0,
+                        'mount_name': mount_name,
+                        'depth': depth,
+                        'note': f'Parallel analysis failed: {str(e)}'
+                    })
+        
+        self.logger.info(f"Parallel analysis complete - processed {len(dir_paths)} directories")
 
 class SmartScanner:
     """Smart scanner that manages container spawning per chunk"""
@@ -215,6 +345,7 @@ class SmartScanner:
         self.active_containers = {}
         self.completed_chunks = 0
         self.failed_chunks = 0
+        self._shutdown_requested = False
         
     def create_scan_database(self):
         """Create a new database with the same schema"""
@@ -356,22 +487,47 @@ class SmartScanner:
     
     def scan_mount_point(self, mount_path, mount_name):
         """Scan a mount point using smart chunking"""
+        # Set up signal handling for graceful shutdown
+        self._setup_signal_handlers()
+        
         self.logger.info(f"Starting smart scan of {mount_path}")
+        self.logger.info(f"Analysis timeout: {self.analyzer.analysis_timeout//60} minutes per directory")
+        self.logger.info(f"Max containers: {MAX_CONTAINERS}")
+        
+        # Validate mount path exists
+        if not os.path.exists(mount_path):
+            raise Exception(f"Mount path does not exist: {mount_path}")
         
         # Create database
         self.create_scan_database()
         
         # Analyze directory structure
         self.logger.info("Analyzing directory structure...")
+        
+        # Start analysis and begin processing chunks as they're discovered
         chunks = self.analyzer.find_optimal_chunks(mount_path, mount_name)
         
+        if not chunks:
+            self.logger.warning("No chunks found - creating single fallback chunk")
+            chunks = [{
+                'path': mount_path,
+                'size_gb': 0,
+                'mount_name': mount_name,
+                'depth': 0,
+                'note': 'Fallback chunk - analysis failed'
+            }]
+        
+        self.logger.info(f"\n=== CHUNK ANALYSIS COMPLETE ===")
         self.logger.info(f"Found {len(chunks)} optimal chunks:")
         total_size = sum(chunk['size_gb'] for chunk in chunks)
-        for i, chunk in enumerate(chunks):
-            note = f" ({chunk['note']})" if 'note' in chunk else ""
-            self.logger.info(f"  {i+1:2d}. {chunk['path']} - {chunk['size_gb']:.2f} GB{note}")
         
-        self.logger.info(f"Total size: {total_size:.2f} GB across {len(chunks)} chunks")
+        for i, chunk in enumerate(chunks):
+            note = f" [{chunk['note']}]" if 'note' in chunk else ""
+            self.logger.info(f"  {i+1:2d}. {chunk['path']:<60} | {chunk['size_gb']:>8.2f} GB{note}")
+        
+        self.logger.info(f"\nTotal size: {total_size:.2f} GB across {len(chunks)} chunks")
+        self.logger.info(f"Estimated scan time: {self._estimate_scan_time(chunks):.0f} minutes")
+        self.logger.info("===================================\n")
         
         # Process chunks in batches
         start_time = time.time()
@@ -393,21 +549,28 @@ class SmartScanner:
         
         # Final statistics
         elapsed = time.time() - start_time
-        self.logger.info(f"\nScan Complete!")
-        self.logger.info(f"Completed chunks: {self.completed_chunks}")
-        self.logger.info(f"Failed chunks: {self.failed_chunks}")
+        self.logger.info(f"\n=== SCAN COMPLETE ===")
+        self.logger.info(f"Completed chunks: {self.completed_chunks}/{len(chunks)}")
+        self.logger.info(f"Failed chunks: {self.failed_chunks}/{len(chunks)}")
+        self.logger.info(f"Success rate: {(self.completed_chunks/(self.completed_chunks+self.failed_chunks)*100):.1f}%" if (self.completed_chunks + self.failed_chunks) > 0 else "N/A")
         self.logger.info(f"Total time: {elapsed/60:.1f} minutes")
+        self.logger.info(f"Average time per chunk: {elapsed/len(chunks)/60:.1f} minutes")
+        self.logger.info("======================\n")
         
         # Show database statistics
         self._show_final_stats()
     
     def _process_chunk(self, chunk):
-        """Process a single chunk"""
+        """Process a single chunk with detailed progress logging"""
+        chunk_start = time.time()
+        self.logger.info(f"[STARTING] Chunk processing: {chunk['path']} ({chunk['size_gb']:.2f} GB)")
+        
         container_id = self.start_container(chunk)
         if not container_id:
             raise Exception(f"Failed to start container for {chunk['path']}")
         
-        # Wait for this specific container to complete
+        # Wait for this specific container to complete with periodic progress updates
+        last_log_time = time.time()
         while True:
             try:
                 result = subprocess.run(
@@ -417,6 +580,8 @@ class SmartScanner:
                 
                 if not result.stdout.strip():
                     # Container finished
+                    chunk_elapsed = time.time() - chunk_start
+                    
                     exit_result = subprocess.run(
                         ['docker', 'inspect', container_id, '--format', '{{.State.ExitCode}}'],
                         capture_output=True, text=True
@@ -426,19 +591,81 @@ class SmartScanner:
                     
                     if exit_code == 0:
                         self.completed_chunks += 1
-                        self.logger.info(f"✓ Completed chunk: {chunk['path']} ({chunk['size_gb']:.2f} GB)")
+                        self.logger.info(f"✓ [COMPLETED {self.completed_chunks}/{self.completed_chunks+self.failed_chunks}] {chunk['path']} ({chunk['size_gb']:.2f} GB) in {chunk_elapsed/60:.1f}min")
                     else:
                         self.failed_chunks += 1
-                        self.logger.error(f"✗ Failed chunk: {chunk['path']} - Exit code: {exit_code}")
+                        self.logger.error(f"✗ [FAILED {self.failed_chunks}] {chunk['path']} - Exit code: {exit_code} after {chunk_elapsed/60:.1f}min")
+                        
+                        # Get container logs for debugging
+                        try:
+                            log_result = subprocess.run(
+                                ['docker', 'logs', '--tail', '20', container_id],
+                                capture_output=True, text=True, timeout=10
+                            )
+                            if log_result.stdout or log_result.stderr:
+                                self.logger.error(f"Container logs:\n{log_result.stdout}{log_result.stderr}")
+                        except:
+                            pass
+                        
                         raise Exception(f"Container failed with exit code {exit_code}")
                     
                     break
                 
-                time.sleep(5)  # Check every 5 seconds
+                # Periodic progress logging for long-running containers
+                current_time = time.time()
+                if current_time - last_log_time > 300:  # Every 5 minutes
+                    elapsed = current_time - chunk_start
+                    self.logger.info(f"[PROGRESS] {chunk['path']} still running... ({elapsed/60:.1f}min elapsed)")
+                    last_log_time = current_time
+                
+                time.sleep(10)  # Check every 10 seconds
                 
             except Exception as e:
-                self.logger.error(f"Error waiting for container {container_id}: {e}")
+                chunk_elapsed = time.time() - chunk_start
+                self.logger.error(f"Error waiting for container {container_id} after {chunk_elapsed/60:.1f}min: {e}")
+                
+                # Check for shutdown request
+                if self._shutdown_requested:
+                    self.logger.info("Shutdown requested, stopping chunk processing...")
+                    raise KeyboardInterrupt("Shutdown requested")
+                
                 raise
+    
+    def _setup_signal_handlers(self):
+        """Setup signal handlers for graceful shutdown"""
+        def signal_handler(signum, frame):
+            signal_name = signal.Signals(signum).name
+            self.logger.info(f"\n{signal_name} received - initiating graceful shutdown...")
+            self._shutdown_requested = True
+            
+            # Stop any running containers
+            if self.active_containers:
+                self.logger.info(f"Stopping {len(self.active_containers)} active containers...")
+                for container_id, info in list(self.active_containers.items()):
+                    try:
+                        subprocess.run(['docker', 'stop', container_id], timeout=30)
+                        self.logger.info(f"Stopped container: {info['name']}")
+                    except Exception as e:
+                        self.logger.error(f"Error stopping container {container_id}: {e}")
+            
+            # Show final stats before exiting
+            self.logger.info(f"\nShutdown Summary:")
+            self.logger.info(f"Completed chunks: {self.completed_chunks}")
+            self.logger.info(f"Failed chunks: {self.failed_chunks}")
+            self._show_final_stats()
+            
+            sys.exit(130)  # Standard exit code for Ctrl+C
+        
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+    
+    def _estimate_scan_time(self, chunks):
+        """Estimate total scan time based on chunk sizes"""
+        # Rough estimate: 1 minute per GB for scanning + overhead
+        total_gb = sum(chunk['size_gb'] for chunk in chunks)
+        base_time = total_gb * 0.5  # 30 seconds per GB
+        overhead = len(chunks) * 2  # 2 minutes overhead per chunk
+        return base_time + overhead
     
     def _show_final_stats(self):
         """Show final database statistics"""
@@ -448,25 +675,48 @@ class SmartScanner:
             cursor = conn.cursor()
             
             # Get overall stats
-            cursor.execute("SELECT COUNT(*), SUM(size) FROM files")
-            total_files, total_bytes = cursor.fetchone()
+            cursor.execute("SELECT COUNT(*), SUM(size), COUNT(DISTINCT mount_point) FROM files")
+            result = cursor.fetchone()
+            total_files = result[0] or 0
+            total_bytes = result[1] or 0
+            total_mounts = result[2] or 0
+            
+            # Get per-file-type stats
+            cursor.execute("""
+                SELECT file_type, COUNT(*), SUM(size) 
+                FROM files 
+                GROUP BY file_type 
+                ORDER BY SUM(size) DESC
+            """)
+            type_stats = cursor.fetchall()
             
             # Get per-mount stats
             cursor.execute("""
                 SELECT mount_point, COUNT(*), SUM(size) 
                 FROM files 
                 GROUP BY mount_point
+                ORDER BY SUM(size) DESC
             """)
             mount_stats = cursor.fetchall()
             
             conn.close()
             
-            self.logger.info(f"\nDatabase Statistics:")
-            self.logger.info(f"Total files: {total_files:,}")
-            self.logger.info(f"Total size: {total_bytes/1024**4:.2f} TB")
+            self.logger.info(f"=== DATABASE STATISTICS ===")
+            self.logger.info(f"Total files scanned: {total_files:,}")
+            self.logger.info(f"Total size scanned: {total_bytes/1024**3:.2f} GB ({total_bytes/1024**4:.2f} TB)")
+            self.logger.info(f"Mount points: {total_mounts}")
             
-            for mount, files, size in mount_stats:
-                self.logger.info(f"  {mount}: {files:,} files, {size/1024**3:.2f} GB")
+            if type_stats:
+                self.logger.info(f"\nBy file type:")
+                for file_type, files, size in type_stats[:10]:  # Top 10
+                    self.logger.info(f"  {file_type or 'unknown':<12}: {files:>8,} files, {size/1024**3:>8.2f} GB")
+            
+            if mount_stats:
+                self.logger.info(f"\nBy mount point:")
+                for mount, files, size in mount_stats:
+                    self.logger.info(f"  {mount:<20}: {files:>8,} files, {size/1024**3:>8.2f} GB")
+            
+            self.logger.info("=============================")
                 
         except Exception as e:
             self.logger.error(f"Error getting final stats: {e}")
