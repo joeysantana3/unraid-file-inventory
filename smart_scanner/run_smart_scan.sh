@@ -7,7 +7,18 @@ SMART_DB_PATH="$SMART_SCAN_DIR/smart_catalog.db"
 WORKER_IMAGE_NAME="nas-scanner-hp:latest"
 SMART_IMAGE_NAME="nas-scanner-smart:latest"
 
-{{ ... }}
+# Print functions
+print_status() {
+    echo "[INFO] $1"
+}
+
+print_success() {
+    echo "[SUCCESS] $1"
+}
+
+print_error() {
+    echo "[ERROR] $1" >&2
+}
 
 setup_smart_scanner() {
     print_status "Setting up Smart Scanner environment..."
@@ -59,7 +70,18 @@ EOF
     print_success "Smart Scanner setup complete"
 }
 
-{{ ... }}
+show_usage() {
+    echo "Usage: $0 <command> [args...]"
+    echo "Commands:"
+    echo "  scan <mount_path> <mount_name> [options]  - Start smart scanning"
+    echo "  status                                    - Show scan status"
+    echo "  cleanup                                   - Clean up containers"
+    echo ""
+    echo "Smart scan options:"
+    echo "  --chunk-size N        Chunk size in GB (default: 100)"
+    echo "  --max-containers N    Maximum concurrent containers (default: 8)"
+    echo "  --image IMAGE         Docker image to use (default: nas-scanner-hp:latest)"
+}
 
 start_smart_scan() {
     local mount_path="$1"
@@ -95,4 +117,42 @@ start_smart_scan() {
         "$@"
 }
 
-{{ ... }}
+show_status() {
+    print_status "Smart Scanner Status"
+    echo "Database: $SMART_DB_PATH"
+    if [ -f "$SMART_DB_PATH" ]; then
+        echo "Database exists: $(ls -lh "$SMART_DB_PATH" | awk '{print $5}')"
+    else
+        echo "Database not found"
+    fi
+    
+    # Show running containers
+    echo "Running containers:"
+    docker ps --filter "ancestor=$SMART_IMAGE_NAME" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+}
+
+cleanup_containers() {
+    print_status "Cleaning up smart scanner containers..."
+    docker ps -q --filter "ancestor=$SMART_IMAGE_NAME" | xargs -r docker stop
+    docker ps -q --filter "ancestor=$WORKER_IMAGE_NAME" | xargs -r docker stop
+    print_success "Cleanup complete"
+}
+
+# Main script
+case "$1" in
+    scan)
+        shift
+        setup_smart_scanner
+        start_smart_scan "$@"
+        ;;
+    status)
+        show_status
+        ;;
+    cleanup)
+        cleanup_containers
+        ;;
+    *)
+        show_usage
+        exit 1
+        ;;
+esac
