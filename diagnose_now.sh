@@ -14,7 +14,14 @@ docker stats --no-stream $(docker ps --filter "name=nas-hp-" -q) 2>/dev/null
 echo ""
 
 echo "3. I/O WAIT CHECK:"
-iostat -c 1 2 | tail -1 | awk '{print "Current iowait: " $4 "%"}'
+if command -v iostat >/dev/null 2>&1; then
+    iostat -c 1 2 | tail -1 | awk '{print "Current iowait: " $4 "%"}'
+elif [ -f /proc/stat ]; then
+    # Alternative method using /proc/stat
+    awk '/cpu / {u=$2+$4; t=$2+$3+$4+$5+$6+$7+$8; print "Current iowait: " ($6/t)*100 "%"}' /proc/stat
+else
+    echo "Current iowait: Unable to determine"
+fi
 echo ""
 
 echo "4. PROCESSES IN I/O WAIT (D state):"
