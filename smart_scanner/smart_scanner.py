@@ -36,10 +36,11 @@ def setup_logging():
 class DirectoryAnalyzer:
     """Analyzes directory sizes and creates optimal chunks"""
     
-    def __init__(self, logger):
+    def __init__(self, logger, analysis_timeout=1800):
         self.logger = logger
         self._size_cache = {}
         self._lock = threading.Lock()
+        self.analysis_timeout = analysis_timeout
     
     def get_directory_size(self, path):
         """Get directory size with caching"""
@@ -49,11 +50,12 @@ class DirectoryAnalyzer:
         
         try:
             # Use du command for fast size calculation
+            # Increased timeout for very large directories (terabytes)
             result = subprocess.run(
                 ['du', '-sb', path], 
                 capture_output=True, 
                 text=True, 
-                timeout=300  # 5 minute timeout
+                timeout=self.analysis_timeout  # Use configurable timeout
             )
             
             if result.returncode == 0:
@@ -66,8 +68,10 @@ class DirectoryAnalyzer:
                 return 0
                 
         except subprocess.TimeoutExpired:
-            self.logger.warning(f"Timeout getting size for {path}")
-            return CHUNK_SIZE_BYTES + 1  # Assume large, will be scanned as-is
+            self.logger.warning(f"Timeout getting size for {path} after {self.analysis_timeout} seconds")
+            # For very large directories that timeout, assume they're larger than chunk size
+            # This will cause them to be processed as single chunks
+            return CHUNK_SIZE_BYTES + 1
         except Exception as e:
             self.logger.error(f"Error getting size for {path}: {e}")
             return 0
@@ -152,11 +156,11 @@ class DirectoryAnalyzer:
 class SmartScanner:
     """Smart scanner that manages container spawning per chunk"""
     
-    def __init__(self, db_path, image_name='nas-scanner-hp:latest'):
+    def __init__(self, db_path, image_name='nas-scanner-hp:latest', analysis_timeout=1800):
         self.logger = setup_logging()
         self.db_path = db_path
         self.image_name = image_name
-        self.analyzer = DirectoryAnalyzer(self.logger)
+        self.analyzer = DirectoryAnalyzer(self.logger, analysis_timeout)
         self.active_containers = {}
         self.completed_chunks = 0
         self.failed_chunks = 0
@@ -429,6 +433,7 @@ def main():
     parser.add_argument('--chunk-size', type=int, default=100, help='Chunk size in GB (default: 100)')
     parser.add_argument('--max-containers', type=int, default=8, help='Maximum concurrent containers')
     parser.add_argument('--image', default='nas-scanner-hp:latest', help='Docker image to use')
+    parser.add_argument('--analysis-timeout', type=int, default=1800, help='Directory analysis timeout in seconds (default: 1800 = 30 minutes)')
     
     args = parser.parse_args()
     
@@ -439,7 +444,7 @@ def main():
     MAX_CONTAINERS = args.max_containers
     
     # Create and run scanner
-    scanner = SmartScanner(args.db, args.image)
+    scanner = SmartScanner(args.db, args.image, args.analysis_timeout)
     scanner.scan_mount_point(args.mount_path, args.mount_name)
 
 if __name__ == '__main__':
