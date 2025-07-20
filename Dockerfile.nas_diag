@@ -1,0 +1,27 @@
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y \
+    procps \
+    iproute2 \
+    inetutils-ping \
+    iputils-ping \
+    net-tools \
+    dnsutils \
+    curl \
+    wget \
+    iptables \
+    ipvsadm \
+    lsof \
+    sqlite3 \
+    sysstat \
+    jq \
+    vim \
+    iputils-ping \
+    procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the diagnostic script into the container
+COPY diagnose_now.sh /usr/local/bin/diagnose_now.sh
+RUN chmod +x /usr/local/bin/diagnose_now.sh
+
+CMD ["/bin/bash"]

@@ -72,6 +72,14 @@ for mount in /mnt/user/Movies /mnt/user/Music /mnt/user/Photos; do
 done
 echo ""
 
+echo "=== DISK SATURATION CHECK ==="
+
+iostat -dx 1 3 -p ALL -t -c -k -N -y -m -V
+echo 'Disk stats (3 samples, 1 second interval):'
+iostat -dx 1 3
+
+echo "=== END OF DISK SATURATION CHECK ==="
+
 echo "9. DISK USAGE ON SCAN DATA:"
 df -h /mnt/user/appdata/nas-scanner/scan_data/ 2>/dev/null || echo "Scan data directory not accessible"
 echo ""
