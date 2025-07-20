@@ -192,49 +192,44 @@ class SmartScanner:
         db_dir = os.path.dirname(self.db_path)
         os.makedirs(db_dir, exist_ok=True)
         
-        # Use the existing scanner to create schema
-        try:
-            subprocess.run([
-                'python3', 'nas_scanner_hp.py', 
-                '--db', self.db_path,
-                '--init-only'  # We'll need to add this flag
-            ], check=True)
-            self.logger.info(f"Created database: {self.db_path}")
-        except subprocess.CalledProcessError:
-            # Fallback: create schema manually
-            import sqlite3
-            conn = sqlite3.connect(self.db_path)
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS files (
-                    path TEXT PRIMARY KEY,
-                    size INTEGER,
-                    mtime REAL,
-                    checksum TEXT,
-                    mount_point TEXT,
-                    file_type TEXT,
-                    extension TEXT,
-                    scan_time REAL
-                ) WITHOUT ROWID
-            ''')
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS scan_stats (
-                    mount_point TEXT PRIMARY KEY,
-                    files_scanned INTEGER,
-                    bytes_scanned INTEGER,
-                    start_time REAL,
-                    end_time REAL
-                )
-            ''')
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS scanned_dirs (
-                    path TEXT PRIMARY KEY,
-                    mount_point TEXT,
-                    scan_time REAL
-                ) WITHOUT ROWID
-            ''')
-            conn.commit()
-            conn.close()
-            self.logger.info(f"Created database schema: {self.db_path}")
+        # Directly create the database schema.  The previous implementation
+        # attempted to invoke ``nas_scanner_hp.py`` with a non-existent
+        # ``--init-only`` flag which resulted in an argument parsing error.
+        # Creating the schema here avoids that issue and keeps the behaviour
+        # self-contained.
+        import sqlite3
+        conn = sqlite3.connect(self.db_path)
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS files (
+                path TEXT PRIMARY KEY,
+                size INTEGER,
+                mtime REAL,
+                checksum TEXT,
+                mount_point TEXT,
+                file_type TEXT,
+                extension TEXT,
+                scan_time REAL
+            ) WITHOUT ROWID
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS scan_stats (
+                mount_point TEXT PRIMARY KEY,
+                files_scanned INTEGER,
+                bytes_scanned INTEGER,
+                start_time REAL,
+                end_time REAL
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS scanned_dirs (
+                path TEXT PRIMARY KEY,
+                mount_point TEXT,
+                scan_time REAL
+            ) WITHOUT ROWID
+        ''')
+        conn.commit()
+        conn.close()
+        self.logger.info(f"Created database schema: {self.db_path}")
     
     def start_container(self, chunk):
         """Start a container for a specific chunk"""
