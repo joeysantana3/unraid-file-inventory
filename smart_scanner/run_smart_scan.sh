@@ -33,6 +33,19 @@ setup_smart_scanner() {
         SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
         REPO_ROOT="$(dirname "$SCRIPT_DIR")"
         
+        print_status "Copying files from $SCRIPT_DIR and $REPO_ROOT"
+        
+        # Ensure source files exist before copying
+        if [ ! -f "$SCRIPT_DIR/smart_scanner.py" ]; then
+            print_error "smart_scanner.py not found at $SCRIPT_DIR/smart_scanner.py"
+            exit 1
+        fi
+        
+        if [ ! -f "$REPO_ROOT/mono_scanner/nas_scanner_hp.py" ]; then
+            print_error "nas_scanner_hp.py not found at $REPO_ROOT/mono_scanner/nas_scanner_hp.py"
+            exit 1
+        fi
+        
         cp "$SCRIPT_DIR/smart_scanner.py" .
         cp "$REPO_ROOT/mono_scanner/nas_scanner_hp.py" .
         
@@ -42,6 +55,7 @@ FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y \
     procps \
+    docker.io \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -62,9 +76,25 @@ EOF
     # Ensure worker Docker image exists
     if ! docker image inspect "$WORKER_IMAGE_NAME" >/dev/null 2>&1; then
         print_error "Worker Docker image $WORKER_IMAGE_NAME not found. Please build it first:"
-        echo "  cd \"$(dirname "$(dirname "$(realpath "$0")")")/mono_scanner\""
-        echo "  docker build -t $WORKER_IMAGE_NAME ."
-        exit 1
+        print_status "Building worker image automatically..."
+        
+        # Try to build the worker image automatically
+        if [ -f "$REPO_ROOT/mono_scanner/Dockerfile" ]; then
+            cd "$REPO_ROOT/mono_scanner"
+            if docker build -t "$WORKER_IMAGE_NAME" .; then
+                print_success "Worker image built successfully"
+                cd "$SMART_SCAN_DIR"
+            else
+                print_error "Failed to build worker image"
+                exit 1
+            fi
+        else
+            print_error "Dockerfile not found at $REPO_ROOT/mono_scanner/Dockerfile"
+            echo "Manual build required:"
+            echo "  cd \"$REPO_ROOT/mono_scanner\""
+            echo "  docker build -t $WORKER_IMAGE_NAME ."
+            exit 1
+        fi
     fi
     
     print_success "Smart Scanner setup complete"
@@ -105,6 +135,7 @@ start_smart_scan() {
     print_status "Additional args: $*"
     
     # Run the smart scanner in a container
+    # Note: All arguments after mount_name are passed to smart_scanner.py
     docker run --rm -it \
         -v "$mount_path:$mount_path:ro" \
         -v "$SMART_SCAN_DIR:/data" \
