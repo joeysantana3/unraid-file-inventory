@@ -3,7 +3,6 @@ FROM ubuntu:22.04
 RUN apt-get update && apt-get install -y \
     procps \
     iproute2 \
-    inetutils-ping \
     iputils-ping \
     net-tools \
     dnsutils \
@@ -16,8 +15,6 @@ RUN apt-get update && apt-get install -y \
     sysstat \
     jq \
     vim \
-    iputils-ping \
-    procps \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the diagnostic script into the container
