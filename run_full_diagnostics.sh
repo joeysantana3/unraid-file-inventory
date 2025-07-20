@@ -32,22 +32,7 @@ for mount in /mnt/user/Movies /mnt/user/Music /mnt/user/Photos; do
 done
 echo ""
 
-echo "DATABASE STATUS:"
-DB_PATH="/mnt/user/appdata/nas-scanner/scan_data/nas_catalog.db"
-if [ -f "$DB_PATH" ]; then
-    echo "Database size: $(du -h "$DB_PATH" | cut -f1)"
-    echo "Last modified: $(stat -c %y "$DB_PATH")"
-    
-    echo "Testing database access..."
-    if timeout 5 sqlite3 "$DB_PATH" "SELECT COUNT(*) as files FROM files" 2>/dev/null; then
-        echo "✅ Database accessible"
-    else
-        echo "❌ Database not accessible or timeout"
-    fi
-else
-    echo "❌ Database file not found"
-fi
-echo ""
 
 echo "=== SYSTEM DIAGNOSTICS (CONTAINER) ==="
-docker exec -it nas_diag /usr/local/bin/diagnose_now.sh
+docker exec -it -v /mnt/user/appdata/nas-scanner/scan_data/nas_catalog.db:/mnt/database/nas_catalog.db:ro \
+ -v /mnt/database:/mnt/database:ro nas_diag /usr/local/bin/diagnose_now.sh

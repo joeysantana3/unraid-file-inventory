@@ -5,6 +5,23 @@ echo "=== IMMEDIATE SCANNER DIAGNOSTICS ==="
 echo "Time: $(date)"
 echo ""
 
+echo "DATABASE STATUS:"
+DB_PATH="/mnt/database/nas_catalog.db"
+if [ -f "$DB_PATH" ]; then
+    echo "Database size: $(du -h "$DB_PATH" | cut -f1)"
+    echo "Last modified: $(stat -c %y "$DB_PATH")"
+    
+    echo "Testing database access..."
+    if timeout 5 sqlite3 "$DB_PATH" "SELECT COUNT(*) as files FROM files" 2>/dev/null; then
+        echo "✅ Database accessible"
+    else
+        echo "❌ Database not accessible or timeout"
+    fi
+else
+    echo "❌ Database file not found"
+fi
+echo ""
+
 echo "I/O WAIT CHECK:"
 if [ -f /proc/stat ]; then
     # Primary method using /proc/stat (most reliable)
