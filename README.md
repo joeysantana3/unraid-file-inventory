@@ -49,7 +49,29 @@ docker build -t nas-scanner-hp:latest .
 ### Smart Scanner
 ```bash
 cd smart_scanner
-./run_smart_scan.sh scan /mnt/user/LargeMountPoint LargeMountPoint
+./run_smart_scan.sh scan /mnt/user/LargeMountPoint LargeMountPoint [options]
+```
+
+**Arguments:**
+- `scan`: Command to start scanning
+- `/mnt/user/LargeMountPoint`: Path to mount point to scan
+- `LargeMountPoint`: Name identifier for the mount point
+
+**Optional Arguments (passed to smart_scanner.py):**
+- `--chunk-size N`: Chunk size in GB (default: 100)
+- `--max-containers N`: Maximum concurrent containers (default: 8)
+- `--image IMAGE`: Docker image to use (default: nas-scanner-hp:latest)
+
+**Examples:**
+```bash
+# Basic scan with defaults
+./run_smart_scan.sh scan /mnt/user/Photos Photos
+
+# Custom chunk size and container limit
+./run_smart_scan.sh scan /mnt/user/Videos Videos --chunk-size 50 --max-containers 4
+
+# Use custom scanner image
+./run_smart_scan.sh scan /mnt/user/Documents Documents --image my-scanner:v2
 ```
 
 ## Database Schema
