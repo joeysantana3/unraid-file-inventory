@@ -2,12 +2,10 @@ docker build -t nas_diag -f Dockerfile.nas_diag .
 
 docker run -d --name nas_diag \
   -v /mnt/user/appdata/nas-scanner/scan_data:/mnt/user/appdata/nas-scanner/scan_data:ro \
-  -v /proc:/host_proc:ro \
-  -v /var/run/docker.sock:/var/run/docker.sock:ro \
   --pid=host \
   --cap-add SYS_PTRACE \
   --security-opt seccomp=unconfined \
-  ubuntu:22.04 tail -f /dev/null
+  nas_diag tail -f /dev/null
 
 
   docker exec -it nas_diag /usr/local/bin/diagnose_now.sh
