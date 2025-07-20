@@ -48,9 +48,31 @@ class DirectoryAnalyzer:
             if path in self._size_cache:
                 return self._size_cache[path]
         
+        # For very large directories, try a faster estimation first
         try:
-            # Use du command for fast size calculation
-            # Increased timeout for very large directories (terabytes)
+            # Quick file count check - if too many files, skip detailed analysis
+            count_result = subprocess.run(
+                ['find', path, '-type', 'f', '|', 'wc', '-l'], 
+                shell=True,
+                capture_output=True, 
+                text=True, 
+                timeout=60  # 1 minute timeout for file count
+            )
+            
+            if count_result.returncode == 0:
+                file_count = int(count_result.stdout.strip())
+                # If more than 1M files, assume it's a large chunk and skip du
+                if file_count > 1000000:
+                    self.logger.info(f"Large directory detected ({file_count:,} files): {path} - treating as single chunk")
+                    with self._lock:
+                        self._size_cache[path] = CHUNK_SIZE_BYTES + 1
+                    return CHUNK_SIZE_BYTES + 1
+        except:
+            pass  # Fall back to du if file count fails
+        
+        try:
+            # Use du command for size calculation
+            self.logger.info(f"Analyzing directory size: {path}")
             result = subprocess.run(
                 ['du', '-sb', path], 
                 capture_output=True, 
