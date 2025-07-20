@@ -15,6 +15,8 @@ if [ -f "$DB_PATH" ]; then
     else
         echo "sqlite3 not found"
     fi
+    echo "DB directory is mounted as read only. In WAL mode, sqlite3 needs write access to -wal and -shm files even to read"
+    echo "This will fail"
     echo "Testing database access..."
     if timeout 5 /usr/bin/sqlite3 "$DB_PATH" "SELECT COUNT(*) as files FROM files" 2>/dev/null; then
         echo "✅ Database accessible"
