@@ -114,7 +114,27 @@ class DirectoryAnalyzer:
         def analyze_directory(dir_path, depth=0):
             """Recursively analyze directory structure"""
             try:
-                # Get size of current directory
+                # For root mount points, skip size analysis and go straight to subdirectories
+                if depth == 0 and '/mnt/user/' in dir_path:
+                    self.logger.info(f"Root mount point detected: {dir_path} - analyzing subdirectories for optimal chunking")
+                    try:
+                        subdirs = [d for d in os.listdir(dir_path) 
+                                 if os.path.isdir(os.path.join(dir_path, d)) and not d.startswith('.')]
+                        
+                        if subdirs:
+                            self.logger.info(f"Found {len(subdirs)} subdirectories in {dir_path}")
+                            for subdir in subdirs:
+                                subdir_path = os.path.join(dir_path, subdir)
+                                analyze_directory(subdir_path, depth + 1)
+                            return
+                        else:
+                            self.logger.warning(f"No subdirectories found in {dir_path} - treating as single chunk")
+                            # Fall through to normal analysis if no subdirectories
+                    except (PermissionError, OSError) as e:
+                        self.logger.warning(f"Cannot list root directory {dir_path}: {e} - treating as single chunk")
+                        # Fall through to normal analysis
+                
+                # Get size of current directory (for non-root or fallback cases)
                 dir_size = self.get_directory_size(dir_path)
                 
                 self.logger.info(f"{'  ' * depth}Analyzing {dir_path}: {dir_size / 1024**3:.2f} GB")
