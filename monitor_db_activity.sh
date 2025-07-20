@@ -9,6 +9,7 @@ if [ ! -f "$DB_PATH" ]; then
 fi
 
 prev_count=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM files" 2>/dev/null || echo 0)
+last_write_time=$(date +%s)
 
 while true; do
     sleep 5
@@ -16,7 +17,17 @@ while true; do
     diff=$((current_count - prev_count))
     rate=$(awk -v d="$diff" 'BEGIN{printf "%.2f", d/5}')
     timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "[$timestamp] Writes/sec: $rate"
+    current_time=$(date +%s)
+    
+    # Update last write time if we had writes
+    if [ $diff -gt 0 ]; then
+        last_write_time=$current_time
+    fi
+    
+    # Calculate time since last write
+    time_since_write=$((current_time - last_write_time))
+    
+    echo "[$timestamp] Writes/sec: $rate | Time since last write: ${time_since_write}s"
     echo "Last 5 entries:"
     sqlite3 -header "$DB_PATH" "SELECT datetime(scan_time,'unixepoch') AS time, path FROM files ORDER BY scan_time DESC LIMIT 5" 2>/dev/null || echo "Unable to read database"
     echo
