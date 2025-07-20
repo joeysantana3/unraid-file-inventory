@@ -2,7 +2,7 @@
 # Smart Scanner Orchestration Script - Container-based
 
 # Configuration
-SMART_SCAN_DIR="/mnt/user/appdata/nas-scanner-smart"
+SMART_SCAN_DIR="/mnt/user/appdata/nas-scanner"
 SMART_DB_PATH="$SMART_SCAN_DIR/smart_catalog.db"
 WORKER_IMAGE_NAME="nas-scanner-hp:latest"
 SMART_IMAGE_NAME="nas-scanner-smart:latest"
