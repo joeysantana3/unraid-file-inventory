@@ -1,5 +1,8 @@
 docker build -t nas_diag -f Dockerfile.nas_diag .
 
+docker kill nas_diag
+docker rm nas_diag
+
 docker run -d --name nas_diag \
   -v /mnt/user/appdata/nas-scanner/scan_data:/mnt/user/appdata/nas-scanner/scan_data:ro \
   --pid=host \
@@ -8,4 +11,4 @@ docker run -d --name nas_diag \
   nas_diag tail -f /dev/null
 
 
-  docker exec -it nas_diag /usr/local/bin/diagnose_now.sh
+docker exec -it nas_diag /usr/local/bin/diagnose_now.sh

@@ -18,9 +18,49 @@ fi
 echo ""
 
 echo "2. PROCESSES IN I/O WAIT (D state):"
-ps aux | awk '$8 ~ /D/ { print "PID " $2 ": " $11 " (state: " $8 ")" }' | head -5
-if [ $(ps aux | awk '$8 ~ /D/' | wc -l) -eq 0 ]; then
-    echo "No processes in I/O wait state"
+# Try multiple approaches to catch D state processes
+d_processes=""
+
+# Method 1: ps aux with flexible column detection
+d_procs1=$(ps aux 2>/dev/null | awk 'NR>1 && ($8 ~ /D/ || $7 ~ /D/ || $9 ~ /D/) {print "PID " $2 ": " $11 " (state: " $(NF-5) ")"}' | head -3)
+if [ -n "$d_procs1" ]; then
+    d_processes="$d_procs1"
+fi
+
+# Method 2: ps -eo format (more reliable for state column)
+d_procs2=$(ps -eo pid,stat,comm 2>/dev/null | awk '$2 ~ /D/ {print "PID " $1 ": " $3 " (state: " $2 ")"}' | head -3)
+if [ -n "$d_procs2" ]; then
+    if [ -n "$d_processes" ]; then
+        d_processes="$d_processes"$'\n'"$d_procs2"
+    else
+        d_processes="$d_procs2"
+    fi
+fi
+
+# Method 3: Check /proc directly for D state processes  
+d_procs3=$(find /proc -maxdepth 1 -name '[0-9]*' -type d 2>/dev/null | while read proc_dir; do
+    if [ -r "$proc_dir/stat" ] 2>/dev/null; then
+        state=$(awk '{print $3}' "$proc_dir/stat" 2>/dev/null)
+        if [ "$state" = "D" ]; then
+            pid=$(basename "$proc_dir")
+            comm=$(awk '{print $2}' "$proc_dir/stat" 2>/dev/null | tr -d '()')
+            echo "PID $pid: $comm (state: D)"
+        fi
+    fi
+done | head -2)
+
+if [ -n "$d_procs3" ]; then
+    if [ -n "$d_processes" ]; then
+        d_processes="$d_processes"$'\n'"$d_procs3"
+    else
+        d_processes="$d_procs3"
+    fi
+fi
+
+if [ -n "$d_processes" ]; then
+    echo "$d_processes" | head -5 | sort -u
+else
+    echo "No processes currently in I/O wait state (D state processes are often transient)"
 fi
 echo ""
 
