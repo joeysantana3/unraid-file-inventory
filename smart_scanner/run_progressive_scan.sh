@@ -3,7 +3,7 @@
 # Fixes: Resource checking, better error handling, consistent paths
 
 # Configuration
-SMART_SCAN_DIR="/mnt/user/appdata/nas-scanner/unraid-file-inventory"
+SMART_SCAN_DIR="/mnt/user/appdata/nas-scanner/unraid-file-inventory/smart_scanner"
 PROGRESSIVE_DB_PATH="$SMART_SCAN_DIR/progressive_catalog.db"
 WORKER_IMAGE_NAME="nas-scanner-hp:latest"
 PROGRESSIVE_IMAGE_NAME="nas-scanner-progressive:latest"
