@@ -175,10 +175,12 @@ start_progressive_scan() {
         -v "$DATABASE_HOST_DIR:/data" \
         -v /var/run/docker.sock:/var/run/docker.sock \
         --network host \
+        -e "HOST_DB_DIR=$DATABASE_HOST_DIR" \
         "$PROGRESSIVE_IMAGE_NAME" \
         python progressive_scanner.py "$mount_path" "$mount_name" \
         --db "/data/progressive_catalog.db" \
         --image "$WORKER_IMAGE_NAME" \
+        --host-db-dir "$DATABASE_HOST_DIR" \
         "$@"
 }
 

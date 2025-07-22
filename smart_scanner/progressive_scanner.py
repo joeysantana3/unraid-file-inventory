@@ -9,6 +9,7 @@ Features:
 - Thread-safe database operations
 - Robust error handling and retry logic
 - Proper synchronization and resource management
+- Docker-in-Docker compatibility for container environments
 """
 
 import os
@@ -21,7 +22,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import sqlite3
 import queue
-from datetime import datetime
 import json
 
 MAX_CONTAINERS = 6
@@ -31,14 +31,15 @@ BATCH_SIZE = 100
 class ContainerManager:
     """Manages Docker container lifecycle and limits"""
     
-    def __init__(self, max_containers=MAX_CONTAINERS):
+    def __init__(self, max_containers=MAX_CONTAINERS, host_db_dir=None):
         self.max_containers = max_containers
         self.running_containers = {}
         self.container_lock = threading.Lock()
         self.semaphore = threading.Semaphore(max_containers)
+        self.host_db_dir = host_db_dir  # Host path for database directory
         
     def start_container(self, chunk, db_path, image_name, logger):
-        """Start a container with proper resource management"""
+        """Start a container with proper resource management and Docker-in-Docker support"""
         self.semaphore.acquire()  # Block if max containers reached
         
         try:
@@ -49,12 +50,20 @@ class ContainerManager:
             if not os.path.exists(chunk['path']) or is_empty_directory(chunk['path']):
                 logger.error(f"Skipping empty or missing chunk: {chunk['path']}")
                 return None
+            
+            # Handle Docker-in-Docker scenario
+            # If we have a host_db_dir, use it for mounting; otherwise use container path
+            if self.host_db_dir:
+                db_mount_source = self.host_db_dir
+                logger.debug(f"Using host database directory for mounting: {db_mount_source}")
+            else:
+                db_mount_source = os.path.dirname(db_path)
+                logger.debug(f"Using container database directory for mounting: {db_mount_source}")
                 
-            db_dir = os.path.dirname(db_path)
             cmd = [
                 'docker', 'run', '-d', '--name', container_name, '--rm',
                 '-v', f"{chunk['path']}:{chunk['path']}:ro",
-                '-v', f"{db_dir}:/data",
+                '-v', f"{db_mount_source}:/data",
                 '--cpus', '8', '--memory', '8g',
                 image_name, 'python', 'nas_scanner_hp.py',
                 chunk['path'], chunk['mount_name'],
@@ -62,6 +71,7 @@ class ContainerManager:
                 '--workers', '8'
             ]
             
+            logger.info(f"Starting container with command: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             
             if result.returncode != 0:
@@ -150,8 +160,8 @@ class DatabaseManager:
             with sqlite3.connect(self.db_path, timeout=30) as conn:
                 cursor = conn.cursor()
                 cursor.executemany(
-                    'INSERT OR IGNORE INTO scanned_dirs (chunk_path, mount_name, scan_timestamp) VALUES (?, ?, ?)',
-                    [(path, mount, datetime.now().isoformat()) for path, mount in self.completed_chunks_batch]
+                    'INSERT OR IGNORE INTO scanned_dirs (path, mount_point, scan_time) VALUES (?, ?, ?)',
+                    [(path, mount, time.time()) for path, mount in self.completed_chunks_batch]
                 )
                 conn.commit()
                 logging.info(f"Flushed {len(self.completed_chunks_batch)} completed chunks to database")
@@ -169,11 +179,28 @@ class DatabaseManager:
         try:
             with sqlite3.connect(self.db_path, timeout=30) as conn:
                 cursor = conn.cursor()
-                cursor.execute('SELECT chunk_path FROM scanned_dirs')
+                cursor.execute('SELECT path FROM scanned_dirs')
                 return {row[0] for row in cursor.fetchall()}
         except Exception as e:
             logging.error(f"Error loading scanned chunks: {e}")
             return set()
+
+def detect_container_environment():
+    """Detect if we're running inside a Docker container and determine host paths"""
+    # Check if we're in a container
+    if os.path.exists('/.dockerenv'):
+        # We're in a container, try to determine the host database directory
+        # Look for environment variable or known mount patterns
+        host_db_dir = os.environ.get('HOST_DB_DIR')
+        if host_db_dir:
+            return host_db_dir
+        
+        # Common pattern: if db is at /data/something.db, host is likely /mnt/user/appdata/nas-scanner
+        # This matches the bash script setup
+        if os.path.exists('/data') and os.access('/data', os.W_OK):
+            return '/mnt/user/appdata/nas-scanner'
+    
+    return None
 
 # Setup logging
 def setup_logging(log_file_path=None):
@@ -274,13 +301,24 @@ def main():
     parser.add_argument('--image', default='nas-scanner-hp:latest', help='Docker image to use')
     parser.add_argument('--max-containers', type=int, default=MAX_CONTAINERS, help='Maximum concurrent containers')
     parser.add_argument('--log-file', help='Log file path')
+    parser.add_argument('--host-db-dir', help='Host database directory path (for Docker-in-Docker scenarios)')
     args = parser.parse_args()
 
     logger = setup_logging(args.log_file)
+    
+    # Detect container environment
+    detected_host_db_dir = detect_container_environment()
+    host_db_dir = args.host_db_dir or detected_host_db_dir
+    
+    if host_db_dir:
+        logger.info(f"Docker-in-Docker mode detected. Host database directory: {host_db_dir}")
+    else:
+        logger.info("Running in direct mode (not in container)")
+    
     logger.info(f"Starting progressive scan of {args.mount_path} with max {args.max_containers} containers")
 
     # Initialize managers
-    container_manager = ContainerManager(args.max_containers)
+    container_manager = ContainerManager(args.max_containers, host_db_dir)
     db_manager = DatabaseManager(args.db)
     
     # Load previously scanned chunks
