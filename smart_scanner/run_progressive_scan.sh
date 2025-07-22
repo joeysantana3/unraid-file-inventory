@@ -86,27 +86,37 @@ setup_progressive_scanner() {
     print_status "Script directory: $SCRIPT_DIR"
     print_status "Repository root: $REPO_ROOT"
     
-    # Validate source files exist
-    if [ ! -f "$SCRIPT_DIR/progressive_scanner.py" ]; then
-        # Try the fixed version if it exists
-        if [ -f "$SCRIPT_DIR/progressive_scanner_fixed.py" ]; then
-            print_status "Using fixed version of progressive_scanner.py"
-            cp "$SCRIPT_DIR/progressive_scanner_fixed.py" progressive_scanner.py
-        else
-            print_error "progressive_scanner.py not found at $SCRIPT_DIR"
-            exit 1
-        fi
-    else
-        cp "$SCRIPT_DIR/progressive_scanner.py" .
-    fi
+         # Validate source files exist
+     if [ ! -f "$SCRIPT_DIR/progressive_scanner.py" ]; then
+         # Try the fixed version if it exists
+         if [ -f "$SCRIPT_DIR/progressive_scanner_fixed.py" ]; then
+             print_status "Using fixed version of progressive_scanner.py"
+             cp "$SCRIPT_DIR/progressive_scanner_fixed.py" progressive_scanner.py
+         else
+             print_error "progressive_scanner.py not found at $SCRIPT_DIR"
+             exit 1
+         fi
+     else
+         # Only copy if source and destination are different
+         if [ "$SCRIPT_DIR/progressive_scanner.py" -ef "./progressive_scanner.py" ]; then
+             print_status "progressive_scanner.py already in place"
+         else
+             cp "$SCRIPT_DIR/progressive_scanner.py" .
+         fi
+     fi
     
-    if [ ! -f "$REPO_ROOT/mono_scanner/nas_scanner_hp.py" ]; then
-        print_error "nas_scanner_hp.py not found at $REPO_ROOT/mono_scanner/nas_scanner_hp.py"
-        print_error "Please ensure the mono_scanner directory exists with the scanner script"
-        exit 1
-    fi
-    
-    cp "$REPO_ROOT/mono_scanner/nas_scanner_hp.py" .
+         if [ ! -f "$REPO_ROOT/mono_scanner/nas_scanner_hp.py" ]; then
+         print_error "nas_scanner_hp.py not found at $REPO_ROOT/mono_scanner/nas_scanner_hp.py"
+         print_error "Please ensure the mono_scanner directory exists with the scanner script"
+         exit 1
+     fi
+     
+     # Only copy if source and destination are different
+     if [ "$REPO_ROOT/mono_scanner/nas_scanner_hp.py" -ef "./nas_scanner_hp.py" ]; then
+         print_status "nas_scanner_hp.py already in place"
+     else
+         cp "$REPO_ROOT/mono_scanner/nas_scanner_hp.py" .
+     fi
     
     # Create improved Dockerfile for progressive scanner
     cat > Dockerfile.progressive << 'EOF'
