@@ -137,8 +137,45 @@ class ProgressiveChunkGenerator:
         self.processed_paths = set()
         self._lock = threading.Lock()
     
+    def _is_toplevel_directory_complete(self, dir_path, mount_name, scanned_chunks):
+        """
+        Check if a top-level directory is TRULY complete (not just partially scanned).
+        Only returns True if the exact directory path was marked as scanned AND
+        it appears to be a complete scan (not just subdirectories within it).
+        """
+        # Method 1: Check if this exact path is in scanned_chunks and was likely scanned as a unit
+        if dir_path in scanned_chunks:
+            # Check if this path appears to be scanned as a complete unit
+            # by seeing if there are very few or no subdirectories also marked as scanned
+            subdirs_count = self._count_scanned_subdirectories(dir_path, scanned_chunks)
+            
+            # If there are many scanned subdirectories, this was likely a progressive scan
+            # that got interrupted, so the top-level dir shouldn't be considered "complete"
+            if subdirs_count > 10:  # Arbitrary threshold - if more than 10 subdirs are marked, 
+                                   # it was likely progressive and incomplete
+                self.logger.info(f"🔍 {dir_path} has {subdirs_count} scanned subdirs - likely incomplete progressive scan")
+                return False
+            
+            # If few or no subdirs are scanned, it was likely scanned as a single unit
+            self.logger.info(f"✅ {dir_path} appears to be a complete single-unit scan ({subdirs_count} subdirs)")
+            return True
+        
+        return False
+    
+    def _count_scanned_subdirectories(self, parent_dir, scanned_chunks):
+        """Count how many subdirectories of parent_dir are in scanned_chunks"""
+        count = 0
+        parent_dir_normalized = parent_dir.rstrip('/') + '/'
+        
+        for scanned_path in scanned_chunks:
+            # Check if this scanned path is a subdirectory of parent_dir
+            if scanned_path.startswith(parent_dir_normalized) and scanned_path != parent_dir:
+                count += 1
+        
+        return count
+    
     def generate_initial_chunks(self, root_path, mount_name, scanned_chunks=None):
-        """Generate initial chunks to start scanning immediately, skipping already scanned ones"""
+        """Generate initial chunks to start scanning immediately, with SMART resume logic for top-level dirs"""
         self.logger.info(f"Generating initial chunks for: {root_path}")
         
         if scanned_chunks is None:
@@ -171,13 +208,20 @@ class ProgressiveChunkGenerator:
             
             self.logger.info(f"Found {len(directories)} top-level directories")
             
-            # Create chunks for each top-level directory, skipping already scanned ones
+            # Create chunks for each top-level directory with SMART resume logic
             for i, dir_path in enumerate(directories):
-                # Skip if already scanned
-                if dir_path in scanned_chunks:
-                    self.logger.info(f"⏭️  Skipping already scanned: {dir_path}")
+                # FIXED: Smart check for top-level directories
+                # Only skip if this EXACT path was processed as a TOP-LEVEL chunk, 
+                # not if subdirectories within it were processed
+                if self._is_toplevel_directory_complete(dir_path, mount_name, scanned_chunks):
+                    self.logger.info(f"⏭️  Skipping fully completed top-level directory: {dir_path}")
                     skipped_count += 1
                     continue
+                
+                # Check if this directory has partial progress
+                subdirs_scanned = self._count_scanned_subdirectories(dir_path, scanned_chunks)
+                if subdirs_scanned > 0:
+                    self.logger.info(f"🔄 RESUMING partially scanned directory: {dir_path} ({subdirs_scanned} subdirs already done)")
                 
                 chunk = {
                     'path': dir_path,
@@ -194,12 +238,12 @@ class ProgressiveChunkGenerator:
                 self.processed_paths.update([root_path] + directories)
             
             if skipped_count > 0:
-                self.logger.info(f"📊 Resume summary: {len(chunks)} new chunks, {skipped_count} already completed")
+                self.logger.info(f"📊 Resume summary: {len(chunks)} new chunks, {skipped_count} fully completed")
             
             if chunks:
                 self.logger.info(f"🚀 Generated {len(chunks)} initial chunks - scanning can start immediately!")
             else:
-                self.logger.info("✅ All top-level directories already scanned for this mount!")
+                self.logger.info("✅ All top-level directories fully completed for this mount!")
             
             return chunks
             
@@ -236,10 +280,19 @@ class ProgressiveChunkGenerator:
                     dirs.clear()  # Don't recurse deeper
                     continue
                 
-                # Skip if already scanned
+                # FIXED: Skip if already FULLY scanned (not just partially)
                 if root in scanned_chunks:
-                    skipped_count += 1
-                    continue
+                    # Check if this directory was truly completed or just partially scanned
+                    subdirs_count = self._count_scanned_subdirectories(root, scanned_chunks)
+                    if subdirs_count <= 5:  # If few subdirs, it was likely a complete scan
+                        skipped_count += 1
+                        continue
+                    else:
+                        # Many subdirs scanned - this was likely incomplete, so re-scan it
+                        self.logger.info(f"🔄 Re-scanning likely incomplete directory: {root} ({subdirs_count} subdirs found)")
+                        
+                        # Remove from scanned_chunks to allow re-processing
+                        scanned_chunks.discard(root)
                 
                 # Skip if already processed in this session
                 with self._lock:
