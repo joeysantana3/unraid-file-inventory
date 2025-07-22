@@ -68,10 +68,12 @@ class ContainerManager:
     
     def _sanitize_container_name(self, path):
         """Safely generate container name from path"""
-        # First sanitize the path before using it
-        safe_path = re.sub(r'[^a-zA-Z0-9/_-]', '_', path)
-        # Use last 20 chars of path + unique ID
-        path_suffix = safe_path[-20:] if len(safe_path) > 20 else safe_path
+        # Replace all non-alphanumeric chars with underscores (no slashes allowed in container names)
+        safe_path = re.sub(r'[^a-zA-Z0-9_-]', '_', path)
+        # Remove any leading/trailing underscores
+        safe_path = safe_path.strip('_')
+        # Use last 30 chars of path + unique ID
+        path_suffix = safe_path[-30:] if len(safe_path) > 30 else safe_path
         unique_id = uuid.uuid4().hex[:8]
         return f"progressive-scan-{path_suffix}-{unique_id}"
         

@@ -118,8 +118,8 @@ setup_progressive_scanner() {
          cp "$REPO_ROOT/mono_scanner/nas_scanner_hp.py" .
      fi
     
-    # Create improved Dockerfile for progressive scanner
-    cat > Dockerfile.progressive << 'EOF'
+         # Create improved Dockerfile for progressive scanner
+     cat > Dockerfile.progressive << 'EOF'
 FROM python:3.11-slim
 
 # Install system dependencies
@@ -131,20 +131,11 @@ RUN apt-get update && apt-get install -y \
     sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user for better security
-RUN useradd -m -s /bin/bash scanner
-
 WORKDIR /app
 
 # Copy application files
 COPY progressive_scanner.py ./
 COPY nas_scanner_hp.py ./
-
-# Set ownership
-RUN chown -R scanner:scanner /app
-
-# Switch to non-root user
-USER scanner
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1
@@ -154,6 +145,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD python -c "import sys; sys.exit(0)"
 
+# Run as root for Docker-in-Docker access (container is isolated anyway)
 CMD ["python", "progressive_scanner.py"]
 EOF
     
