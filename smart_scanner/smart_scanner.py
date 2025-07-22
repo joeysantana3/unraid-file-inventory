@@ -163,6 +163,33 @@ class DirectoryAnalyzer:
                 elapsed = time.time() - self._analysis_start_time
                 return f"{self._progress_counter:3d} | {elapsed//60:02.0f}:{elapsed%60:02.0f}"
             return f"{self._progress_counter:3d}"
+
+    def list_quick_chunks(self, root_path, mount_name):
+        """Return top-level directories as chunks without size analysis"""
+        chunks = []
+        try:
+            for entry in os.scandir(root_path):
+                if entry.is_dir(follow_symlinks=False):
+                    chunks.append({
+                        'path': entry.path,
+                        'size_gb': 0,
+                        'mount_name': mount_name,
+                        'depth': 1,
+                        'note': 'fast'
+                    })
+        except Exception as e:
+            self.logger.error(f"Error listing directories in {root_path}: {e}")
+
+        if not chunks:
+            chunks.append({
+                'path': root_path,
+                'size_gb': 0,
+                'mount_name': mount_name,
+                'depth': 0,
+                'note': 'fast-root'
+            })
+
+        return chunks
     
     def find_optimal_chunks(self, root_path, mount_name):
         """Find optimal directory chunks for scanning with parallel analysis"""
@@ -336,12 +363,13 @@ class DirectoryAnalyzer:
 
 class SmartScanner:
     """Smart scanner that manages container spawning per chunk"""
-    
-    def __init__(self, db_path, image_name='nas-scanner-hp:latest', analysis_timeout=1800):
+
+    def __init__(self, db_path, image_name='nas-scanner-hp:latest', analysis_timeout=1800, skip_analysis=False):
         self.logger = setup_logging()
         self.db_path = db_path
         self.image_name = image_name
         self.analyzer = DirectoryAnalyzer(self.logger, analysis_timeout)
+        self.skip_analysis = skip_analysis
         self.active_containers = {}
         self.completed_chunks = 0
         self.failed_chunks = 0
@@ -505,7 +533,11 @@ class SmartScanner:
         self.logger.info("Analyzing directory structure...")
         
         # Start analysis and begin processing chunks as they're discovered
-        chunks = self.analyzer.find_optimal_chunks(mount_path, mount_name)
+        if self.skip_analysis:
+            self.logger.info("Fast start enabled - skipping size analysis")
+            chunks = self.analyzer.list_quick_chunks(mount_path, mount_name)
+        else:
+            chunks = self.analyzer.find_optimal_chunks(mount_path, mount_name)
         
         if not chunks:
             self.logger.warning("No chunks found - creating single fallback chunk")
@@ -730,6 +762,7 @@ def main():
     parser.add_argument('--max-containers', type=int, default=8, help='Maximum concurrent containers')
     parser.add_argument('--image', default='nas-scanner-hp:latest', help='Docker image to use')
     parser.add_argument('--analysis-timeout', type=int, default=1800, help='Directory analysis timeout in seconds (default: 1800 = 30 minutes)')
+    parser.add_argument('--fast-start', action='store_true', help='Skip size analysis and scan each top-level directory directly')
     
     args = parser.parse_args()
     
@@ -740,7 +773,7 @@ def main():
     MAX_CONTAINERS = args.max_containers
     
     # Create and run scanner
-    scanner = SmartScanner(args.db, args.image, args.analysis_timeout)
+    scanner = SmartScanner(args.db, args.image, args.analysis_timeout, skip_analysis=args.fast_start)
     scanner.scan_mount_point(args.mount_path, args.mount_name)
 
 if __name__ == '__main__':
