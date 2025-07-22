@@ -222,6 +222,11 @@ class ProgressiveChunkGenerator:
                 subdirs_scanned = self._count_scanned_subdirectories(dir_path, scanned_chunks)
                 if subdirs_scanned > 0:
                     self.logger.info(f"🔄 RESUMING partially scanned directory: {dir_path} ({subdirs_scanned} subdirs already done)")
+                    
+                    # CONSERVATIVE APPROACH: For safety, always create the full parent chunk
+                    # The worker scanner has built-in logic to skip already-scanned subdirectories
+                    # This ensures we don't miss any files while still being reasonably efficient
+                    self.logger.info(f"📋 Will create standard chunk for {dir_path} - worker will skip scanned subdirs")
                 
                 chunk = {
                     'path': dir_path,
