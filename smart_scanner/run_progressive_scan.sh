@@ -166,10 +166,13 @@ start_progressive_scan() {
     
     print_status "Additional args: $*"
     
-    # Run the progressive scanner in a container
+    # Store absolute path before any directory changes might affect it
+    DATABASE_HOST_DIR="/mnt/user/appdata/nas-scanner"
+    
+    # Run the progressive scanner in a container with FIXED mount path
     docker run --rm -it \
         -v "$mount_path:$mount_path:ro" \
-        -v "$SMART_SCAN_DIR:/data" \
+        -v "$DATABASE_HOST_DIR:/data" \
         -v /var/run/docker.sock:/var/run/docker.sock \
         --network host \
         "$PROGRESSIVE_IMAGE_NAME" \
@@ -196,7 +199,8 @@ show_status() {
     if [ -f "$PROGRESSIVE_DB_PATH" ]; then
         echo ""
         echo "Current scan progress:"
-        docker run --rm -v "$SMART_SCAN_DIR:/data" "$WORKER_IMAGE_NAME" python -c "
+        # FIXED: Use absolute path for status check too
+        docker run --rm -v "/mnt/user/appdata/nas-scanner:/data" "$WORKER_IMAGE_NAME" python -c "
 import sqlite3, sys
 try:
     conn = sqlite3.connect('/data/progressive_catalog.db')
