@@ -6,7 +6,8 @@ echo "Time: $(date)"
 echo ""
 
 echo "DATABASE STATUS:"
-DB_PATH="/mnt/database/nas_catalog.db"
+DB_PATH="/mnt/user/appdata/nas-scanner/scan_data/nas_catalog.db"
+[ -f "$DB_PATH" ] || DB_PATH="/mnt/user/appdata/nas-scanner-smart/smart_catalog.db"
 if [ -f "$DB_PATH" ]; then
     echo "Database size: $(du -h "$DB_PATH" | cut -f1)"
     echo "Last modified: $(stat -c %y "$DB_PATH")"

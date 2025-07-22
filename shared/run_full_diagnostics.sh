@@ -5,15 +5,20 @@ echo "Time: $(date)"
 echo ""
 
 echo "CONTAINER STATUS:"
-docker ps --filter "name=nas-hp-" --format "table {{.Names}}\t{{.Status}}\t{{.RunningFor}}"
+docker ps --filter "name=nas-hp-" --filter "name=smart-scan-" --format "table {{.Names}}\t{{.Status}}\t{{.RunningFor}}"
 echo ""
 
 echo "CONTAINER CPU/MEMORY (last 10 seconds):"
-docker stats --no-stream $(docker ps --filter "name=nas-hp-" -q) 2>/dev/null
+containers=$(docker ps --filter "name=nas-hp-" --filter "name=smart-scan-" -q)
+if [ -n "$containers" ]; then
+docker stats --no-stream $containers 2>/dev/null
+else
+echo "No containers running"
+fi
 echo ""
 
 echo "RECENT CONTAINER LOGS (last 3 lines each):"
-docker ps --filter "name=nas-hp-" --format "{{.Names}}" | while read container; do
+docker ps --filter "name=nas-hp-" --filter "name=smart-scan-" --format "{{.Names}}" | while read container; do
     echo "--- $container ---"
     docker logs --tail 3 "$container" 2>&1 | sed 's/^/  /'
 done

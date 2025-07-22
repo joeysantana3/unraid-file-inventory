@@ -2,10 +2,15 @@
 # monitor_db_activity.sh - Monitor database writes per second and show last 5 entries
 
 DB_PATH=${1:-/mnt/user/appdata/nas-scanner/scan_data/nas_catalog.db}
-
 if [ ! -f "$DB_PATH" ]; then
-    echo "Database not found at $DB_PATH"
-    exit 1
+    ALT_DB="/mnt/user/appdata/nas-scanner-smart/smart_catalog.db"
+    if [ -f "$ALT_DB" ]; then
+        echo "Database not found at $DB_PATH, using $ALT_DB"
+        DB_PATH="$ALT_DB"
+    else
+        echo "Database not found at $DB_PATH"
+        exit 1
+    fi
 fi
 
 prev_count=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM files" 2>/dev/null || echo 0)
