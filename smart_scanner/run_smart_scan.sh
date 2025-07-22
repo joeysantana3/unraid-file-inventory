@@ -131,6 +131,27 @@ start_smart_scan() {
     print_status "Starting smart scan of $mount_path"
     print_status "Mount name: $mount_name"
     print_status "Database: $SMART_DB_PATH"
+    
+    # Check for existing database and show resume info
+    if [ -f "$SMART_DB_PATH" ]; then
+        print_status "📊 Existing database found - resume capability enabled"
+        
+        # Try to show existing data count
+        if command -v sqlite3 >/dev/null 2>&1; then
+            EXISTING_FILES=$(sqlite3 "$SMART_DB_PATH" "SELECT COUNT(*) FROM files WHERE mount_point='$mount_name';" 2>/dev/null || echo "0")
+            SCANNED_DIRS=$(sqlite3 "$SMART_DB_PATH" "SELECT COUNT(*) FROM scanned_dirs WHERE mount_point='$mount_name';" 2>/dev/null || echo "0")
+            
+            if [ "$EXISTING_FILES" -gt 0 ]; then
+                print_status "🔄 RESUME MODE: $EXISTING_FILES existing files, $SCANNED_DIRS completed chunks"
+                print_status "   Worker containers will skip already scanned directories"
+            else
+                print_status "📊 Database exists but no previous data for this mount"
+            fi
+        fi
+    else
+        print_status "🆕 New database will be created"
+    fi
+    
     print_status "Additional args: $*"
     
     # Run the smart scanner in a container

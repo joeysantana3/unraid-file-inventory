@@ -19,8 +19,6 @@ A high-performance NAS file inventory system designed for Unraid servers with tw
 │   ├── diagnose_*.sh      # Diagnostic tools
 │   └── Dockerfile.nas_diag # Diagnostic container
 └── docs/                  # Documentation
-    ├── CLAUDE.md          # Development guidance
-    └── SCAN_ICLOUD.md     # iCloud scanning notes
 ```
 
 ## Scanning Approaches
@@ -46,32 +44,53 @@ docker build -t nas-scanner-hp:latest .
 ./run_extreme_parallel.sh full
 ```
 
-### Smart Scanner
+### Smart Scanner (Now with 2 approaches!)
+
+#### 🚀 Progressive Scanner (NEW - For TB+ directories)
 ```bash
 cd smart_scanner
-./run_smart_scan.sh scan /mnt/user/LargeMountPoint LargeMountPoint [options]
+# Start immediately - no analysis delay!
+./run_progressive_scan.sh scan /mnt/user/Archive Archive
+
+# Monitor progress
+./run_progressive_scan.sh status
 ```
 
-**Arguments:**
-- `scan`: Command to start scanning
-- `/mnt/user/LargeMountPoint`: Path to mount point to scan
-- `LargeMountPoint`: Name identifier for the mount point
-
-**Optional Arguments (passed to smart_scanner.py):**
-- `--chunk-size N`: Chunk size in GB (default: 100)
-- `--max-containers N`: Maximum concurrent containers (default: 8)
-- `--image IMAGE`: Docker image to use (default: nas-scanner-hp:latest)
-
-**Examples:**
+#### 🧠 Enhanced Smart Scanner (Improved)
 ```bash
-# Basic scan with defaults
+cd smart_scanner
+# Fast-start mode (recommended for large directories)
+./run_smart_scan.sh scan /mnt/user/LargeMountPoint LargeMountPoint --fast-start
+
+# Full analysis mode (for smaller directories)
 ./run_smart_scan.sh scan /mnt/user/Photos Photos
+```
 
-# Custom chunk size and container limit
-./run_smart_scan.sh scan /mnt/user/Videos Videos --chunk-size 50 --max-containers 4
+**Quick Decision Guide:**
+- **Terabytes**: Use Progressive Scanner - `./run_progressive_scan.sh`
+- **Large (100GB+)**: Use Smart Scanner with `--fast-start`
+- **Medium (<100GB)**: Use Smart Scanner without `--fast-start`
 
-# Use custom scanner image
-./run_smart_scan.sh scan /mnt/user/Documents Documents --image my-scanner:v2
+**Key Improvements:**
+- ✅ **No more waiting hours** for analysis on TB directories
+- ✅ **Persistent logging** - logs survive container failures
+- ✅ **Debug tools** - automated failure analysis
+- ✅ **Progressive optimization** - gets smarter while running
+
+**Progressive Scanner Options:**
+- `--max-containers N`: Maximum containers (default: 6)
+- `--image IMAGE`: Docker image to use
+
+**Smart Scanner Options:**
+- `--fast-start`: Skip analysis phase (recommended for large dirs)
+- `--chunk-size N`: Chunk size in GB (default: 100)
+- `--max-containers N`: Maximum containers (default: 8)
+- `--analysis-timeout N`: Analysis timeout seconds (default: 1800)
+
+**Debug Failed Scans:**
+```bash
+# Analyze what went wrong
+./smart_scanner/debug_scan_failure.py
 ```
 
 ## Database Schema

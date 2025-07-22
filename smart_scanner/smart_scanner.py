@@ -27,13 +27,44 @@ CONTAINER_RESOURCES = {
     'memory': '12g'
 }
 
-def setup_logging():
-    """Setup logging"""
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s'
+def setup_logging(log_file_path=None):
+    """Setup logging with both console and file output"""
+    # Create logger
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+    
+    # Clear any existing handlers
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+    
+    # Create formatter
+    formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
     )
-    return logging.getLogger(__name__)
+    
+    # Console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+    
+    # File handler if path provided
+    if log_file_path:
+        try:
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
+            
+            file_handler = logging.FileHandler(log_file_path, mode='a')
+            file_handler.setLevel(logging.INFO)
+            file_handler.setFormatter(formatter)
+            logger.addHandler(file_handler)
+            
+            logger.info(f"Persistent logging enabled: {log_file_path}")
+        except Exception as e:
+            logger.warning(f"Could not setup file logging: {e}")
+    
+    return logger
 
 class DirectoryAnalyzer:
     """Analyzes directory sizes and creates optimal chunks"""
@@ -165,30 +196,50 @@ class DirectoryAnalyzer:
             return f"{self._progress_counter:3d}"
 
     def list_quick_chunks(self, root_path, mount_name):
-        """Return top-level directories as chunks without size analysis"""
+        """Return top-level directories as chunks without size analysis - IMPROVED"""
         chunks = []
+        self.logger.info(f"🚀 FAST START: Creating chunks immediately for {root_path}")
+        
         try:
-            for entry in os.scandir(root_path):
-                if entry.is_dir(follow_symlinks=False):
+            entries = os.listdir(root_path)
+            directories = [os.path.join(root_path, entry) for entry in entries 
+                          if os.path.isdir(os.path.join(root_path, entry)) and not entry.startswith('.')]
+            
+            if directories:
+                self.logger.info(f"Found {len(directories)} top-level directories - creating chunks now!")
+                for i, dir_path in enumerate(directories):
                     chunks.append({
-                        'path': entry.path,
+                        'path': dir_path,
                         'size_gb': 0,
                         'mount_name': mount_name,
                         'depth': 1,
-                        'note': 'fast'
+                        'note': 'fast-start-toplevel'
                     })
+                    self.logger.info(f"✓ Chunk {i+1}: {dir_path}")
+            else:
+                # No subdirectories, scan the whole root
+                chunks.append({
+                    'path': root_path,
+                    'size_gb': 0,
+                    'mount_name': mount_name,
+                    'depth': 0,
+                    'note': 'fast-start-root'
+                })
+                self.logger.info(f"✓ Root chunk: {root_path}")
+                
         except Exception as e:
             self.logger.error(f"Error listing directories in {root_path}: {e}")
-
-        if not chunks:
+            # Emergency fallback
             chunks.append({
                 'path': root_path,
                 'size_gb': 0,
                 'mount_name': mount_name,
                 'depth': 0,
-                'note': 'fast-root'
+                'note': 'fast-start-emergency'
             })
 
+        self.logger.info(f"🎯 FAST START COMPLETE: {len(chunks)} chunks ready immediately!")
+        self.logger.info("🚀 SCANNING WILL START NOW - no waiting for analysis!")
         return chunks
     
     def find_optimal_chunks(self, root_path, mount_name):
@@ -365,7 +416,12 @@ class SmartScanner:
     """Smart scanner that manages container spawning per chunk"""
 
     def __init__(self, db_path, image_name='nas-scanner-hp:latest', analysis_timeout=1800, skip_analysis=False):
-        self.logger = setup_logging()
+        # Setup persistent logging
+        log_dir = os.path.dirname(db_path)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        log_file = os.path.join(log_dir, f'smart_scan_{timestamp}.log')
+        self.logger = setup_logging(log_file)
+        
         self.db_path = db_path
         self.image_name = image_name
         self.analyzer = DirectoryAnalyzer(self.logger, analysis_timeout)
@@ -374,6 +430,18 @@ class SmartScanner:
         self.completed_chunks = 0
         self.failed_chunks = 0
         self._shutdown_requested = False
+        self.scan_start_time = None
+        
+        # Log system information
+        self.logger.info("=" * 60)
+        self.logger.info("SMART SCANNER INITIALIZATION")
+        self.logger.info(f"Database path: {db_path}")
+        self.logger.info(f"Docker image: {image_name}")
+        self.logger.info(f"Analysis timeout: {analysis_timeout}s ({analysis_timeout//60}min)")
+        self.logger.info(f"Max containers: {MAX_CONTAINERS}")
+        self.logger.info(f"Container resources: {CONTAINER_RESOURCES}")
+        self.logger.info(f"Log file: {log_file}")
+        self.logger.info("=" * 60)
         
     def create_scan_database(self):
         """Create a new database with the same schema"""
@@ -420,19 +488,45 @@ class SmartScanner:
         self.logger.info(f"Created database schema: {self.db_path}")
     
     def start_container(self, chunk):
-        """Start a container for a specific chunk"""
+        """Start a container for a specific chunk with enhanced error handling"""
         chunk_name = chunk['path'].replace('/', '_').replace(' ', '_')
         container_name = f"smart-scan-{chunk_name[-50:]}"  # Limit name length
         
         # Sanitize container name
         container_name = ''.join(c for c in container_name if c.isalnum() or c in '-_')
         
+        # Pre-flight checks
+        self.logger.info(f"Pre-flight checks for {chunk['path']}")
+        
+        # Check if mount path exists and is accessible
+        if not os.path.exists(chunk['path']):
+            self.logger.error(f"Chunk path does not exist: {chunk['path']}")
+            return None
+            
+        try:
+            # Quick accessibility test
+            os.listdir(chunk['path'])
+            self.logger.info(f"Chunk path accessible: {chunk['path']}")
+        except PermissionError:
+            self.logger.error(f"Permission denied accessing chunk path: {chunk['path']}")
+            return None
+        except OSError as e:
+            self.logger.error(f"OS error accessing chunk path {chunk['path']}: {e}")
+            return None
+        
+        # Check database directory
+        db_dir = os.path.dirname(self.db_path)
+        if not os.path.exists(db_dir):
+            self.logger.error(f"Database directory does not exist: {db_dir}")
+            return None
+            
+        # Log the full docker command for debugging
         cmd = [
             'docker', 'run', '-d',
             '--name', container_name,
             '--rm',
             '-v', f"{chunk['path']}:{chunk['path']}:ro",
-            '-v', f"{os.path.dirname(self.db_path)}:/data",
+            '-v', f"{db_dir}:/data",
             '--cpus', CONTAINER_RESOURCES['cpus'],
             '--memory', CONTAINER_RESOURCES['memory'],
             '--ulimit', 'nofile=65536:65536',
@@ -444,21 +538,64 @@ class SmartScanner:
             '--workers', '12'
         ]
         
+        self.logger.info(f"Starting container with command: {' '.join(cmd)}")
+        
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
             container_id = result.stdout.strip()
+            
+            if not container_id:
+                self.logger.error(f"Docker run returned empty container ID for {chunk['path']}")
+                return None
+            
+            # Verify container is actually running
+            verify_result = subprocess.run(
+                ['docker', 'ps', '-q', '--filter', f'id={container_id}'],
+                capture_output=True, text=True
+            )
+            
+            if not verify_result.stdout.strip():
+                self.logger.error(f"Container {container_id} not found in running containers immediately after start")
+                # Try to get exit status and logs
+                try:
+                    inspect_result = subprocess.run(
+                        ['docker', 'inspect', container_id, '--format', '{{.State.ExitCode}}'],
+                        capture_output=True, text=True, timeout=10
+                    )
+                    if inspect_result.returncode == 0:
+                        exit_code = inspect_result.stdout.strip()
+                        self.logger.error(f"Container {container_id} exited immediately with code: {exit_code}")
+                        
+                        # Get logs
+                        log_result = subprocess.run(
+                            ['docker', 'logs', container_id],
+                            capture_output=True, text=True, timeout=10
+                        )
+                        if log_result.stdout or log_result.stderr:
+                            self.logger.error(f"Container startup logs:\n{log_result.stdout}\n{log_result.stderr}")
+                except Exception as e:
+                    self.logger.error(f"Could not inspect failed container: {e}")
+                return None
             
             self.active_containers[container_id] = {
                 'name': container_name,
                 'chunk': chunk,
-                'start_time': time.time()
+                'start_time': time.time(),
+                'last_health_check': time.time()
             }
             
-            self.logger.info(f"Started container {container_name} for {chunk['path']} ({chunk['size_gb']:.2f} GB)")
+            self.logger.info(f"✓ Successfully started container {container_name} (ID: {container_id[:12]}) for {chunk['path']} ({chunk['size_gb']:.2f} GB)")
             return container_id
             
+        except subprocess.TimeoutExpired:
+            self.logger.error(f"Timeout starting container for {chunk['path']} (>30s)")
+            return None
         except subprocess.CalledProcessError as e:
             self.logger.error(f"Failed to start container for {chunk['path']}: {e.stderr}")
+            self.logger.error(f"Docker command failed with return code: {e.returncode}")
+            return None
+        except Exception as e:
+            self.logger.error(f"Unexpected error starting container for {chunk['path']}: {e}")
             return None
     
     def monitor_containers(self):
@@ -514,40 +651,79 @@ class SmartScanner:
                 time.sleep(10)  # Check every 10 seconds
     
     def scan_mount_point(self, mount_path, mount_name):
-        """Scan a mount point using smart chunking"""
+        """Scan a mount point using smart chunking with enhanced monitoring"""
+        self.scan_start_time = time.time()
+        
         # Set up signal handling for graceful shutdown
         self._setup_signal_handlers()
         
-        self.logger.info(f"Starting smart scan of {mount_path}")
+        self.logger.info("=" * 60)
+        self.logger.info("SMART SCAN STARTING")
+        self.logger.info(f"Mount path: {mount_path}")
+        self.logger.info(f"Mount name: {mount_name}")
+        self.logger.info(f"Database: {self.db_path}")
         self.logger.info(f"Analysis timeout: {self.analyzer.analysis_timeout//60} minutes per directory")
         self.logger.info(f"Max containers: {MAX_CONTAINERS}")
+        self.logger.info(f"Start time: {datetime.fromtimestamp(self.scan_start_time).strftime('%Y-%m-%d %H:%M:%S')}")
+        self.logger.info("=" * 60)
         
-        # Validate mount path exists
-        if not os.path.exists(mount_path):
-            raise Exception(f"Mount path does not exist: {mount_path}")
+        try:
+            # Validate mount path exists and is accessible
+            if not os.path.exists(mount_path):
+                raise Exception(f"Mount path does not exist: {mount_path}")
+            
+            # Test mount accessibility
+            try:
+                test_files = os.listdir(mount_path)
+                self.logger.info(f"Mount path accessible with {len(test_files)} top-level entries")
+            except PermissionError:
+                raise Exception(f"Permission denied accessing mount path: {mount_path}")
+            except OSError as e:
+                raise Exception(f"OS error accessing mount path: {e}")
+            
+            # Create database
+            self.logger.info("Creating/verifying database schema...")
+            self.create_scan_database()
+            
+            # Test database accessibility
+            try:
+                import sqlite3
+                conn = sqlite3.connect(self.db_path, timeout=10)
+                conn.execute("SELECT COUNT(*) FROM files")
+                conn.close()
+                self.logger.info("Database accessible and schema verified")
+            except Exception as e:
+                raise Exception(f"Database access test failed: {e}")
+            
+            # Analyze directory structure
+            self.logger.info("Starting directory analysis phase...")
+            analysis_start = time.time()
+            
+            # Start analysis and begin processing chunks as they're discovered
+            if self.skip_analysis:
+                self.logger.info("Fast start enabled - skipping size analysis")
+                chunks = self.analyzer.list_quick_chunks(mount_path, mount_name)
+            else:
+                self.logger.info("Running full directory size analysis (this may take a while for large directories)")
+                chunks = self.analyzer.find_optimal_chunks(mount_path, mount_name)
+            
+            analysis_elapsed = time.time() - analysis_start
+            self.logger.info(f"Directory analysis completed in {analysis_elapsed/60:.1f} minutes")
+            
+            if not chunks:
+                self.logger.warning("No chunks found - creating single fallback chunk")
+                chunks = [{
+                    'path': mount_path,
+                    'size_gb': 0,
+                    'mount_name': mount_name,
+                    'depth': 0,
+                    'note': 'Fallback chunk - analysis failed'
+                }]
         
-        # Create database
-        self.create_scan_database()
-        
-        # Analyze directory structure
-        self.logger.info("Analyzing directory structure...")
-        
-        # Start analysis and begin processing chunks as they're discovered
-        if self.skip_analysis:
-            self.logger.info("Fast start enabled - skipping size analysis")
-            chunks = self.analyzer.list_quick_chunks(mount_path, mount_name)
-        else:
-            chunks = self.analyzer.find_optimal_chunks(mount_path, mount_name)
-        
-        if not chunks:
-            self.logger.warning("No chunks found - creating single fallback chunk")
-            chunks = [{
-                'path': mount_path,
-                'size_gb': 0,
-                'mount_name': mount_name,
-                'depth': 0,
-                'note': 'Fallback chunk - analysis failed'
-            }]
+        except Exception as e:
+            self.logger.error(f"Critical error during scan initialization: {e}")
+            self.logger.error("Scan aborted due to initialization failure")
+            raise
         
         self.logger.info(f"\n=== CHUNK ANALYSIS COMPLETE ===")
         self.logger.info(f"Found {len(chunks)} optimal chunks:")
@@ -581,19 +757,32 @@ class SmartScanner:
         
         # Final statistics
         elapsed = time.time() - start_time
-        self.logger.info(f"\n=== SCAN COMPLETE ===")
+        total_elapsed = time.time() - self.scan_start_time if self.scan_start_time else elapsed
+        
+        self.logger.info("=" * 60)
+        self.logger.info("SMART SCAN COMPLETE")
+        self.logger.info("=" * 60)
+        self.logger.info(f"Mount: {mount_name} ({mount_path})")
         self.logger.info(f"Completed chunks: {self.completed_chunks}/{len(chunks)}")
         self.logger.info(f"Failed chunks: {self.failed_chunks}/{len(chunks)}")
-        self.logger.info(f"Success rate: {(self.completed_chunks/(self.completed_chunks+self.failed_chunks)*100):.1f}%" if (self.completed_chunks + self.failed_chunks) > 0 else "N/A")
-        self.logger.info(f"Total time: {elapsed/60:.1f} minutes")
+        success_rate = (self.completed_chunks/(self.completed_chunks+self.failed_chunks)*100) if (self.completed_chunks + self.failed_chunks) > 0 else 0
+        self.logger.info(f"Success rate: {success_rate:.1f}%")
+        self.logger.info(f"Chunk processing time: {elapsed/60:.1f} minutes")
+        self.logger.info(f"Total scan time: {total_elapsed/60:.1f} minutes")
         self.logger.info(f"Average time per chunk: {elapsed/len(chunks)/60:.1f} minutes")
-        self.logger.info("======================\n")
+        self.logger.info(f"Scan finished at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        if self.failed_chunks > 0:
+            self.logger.warning(f"WARNING: {self.failed_chunks} chunks failed - check logs above for details")
+            self.logger.warning("Failed chunks can be re-run individually or investigate mount accessibility")
+        
+        self.logger.info("=" * 60)
         
         # Show database statistics
         self._show_final_stats()
     
     def _process_chunk(self, chunk):
-        """Process a single chunk with detailed progress logging"""
+        """Process a single chunk with detailed progress logging and health monitoring"""
         chunk_start = time.time()
         self.logger.info(f"[STARTING] Chunk processing: {chunk['path']} ({chunk['size_gb']:.2f} GB)")
         
@@ -603,6 +792,10 @@ class SmartScanner:
         
         # Wait for this specific container to complete with periodic progress updates
         last_log_time = time.time()
+        last_health_check = time.time()
+        health_check_interval = 300  # 5 minutes
+        stall_timeout = 3600  # 1 hour without any database activity (for very large chunks)
+        
         while True:
             try:
                 result = subprocess.run(
@@ -624,18 +817,36 @@ class SmartScanner:
                     if exit_code == 0:
                         self.completed_chunks += 1
                         self.logger.info(f"✓ [COMPLETED {self.completed_chunks}/{self.completed_chunks+self.failed_chunks}] {chunk['path']} ({chunk['size_gb']:.2f} GB) in {chunk_elapsed/60:.1f}min")
+                        
+                        # Log database activity check on success
+                        try:
+                            self._check_database_activity(chunk)
+                        except Exception as e:
+                            self.logger.warning(f"Could not check database activity after completion: {e}")
+                            
                     else:
                         self.failed_chunks += 1
                         self.logger.error(f"✗ [FAILED {self.failed_chunks}] {chunk['path']} - Exit code: {exit_code} after {chunk_elapsed/60:.1f}min")
                         
-                        # Get container logs for debugging
+                        # Get comprehensive container logs for debugging
                         try:
                             log_result = subprocess.run(
-                                ['docker', 'logs', '--tail', '20', container_id],
-                                capture_output=True, text=True, timeout=10
+                                ['docker', 'logs', '--tail', '50', container_id],
+                                capture_output=True, text=True, timeout=15
                             )
                             if log_result.stdout or log_result.stderr:
-                                self.logger.error(f"Container logs:\n{log_result.stdout}{log_result.stderr}")
+                                self.logger.error(f"Container logs (last 50 lines):\n{log_result.stdout}\n{log_result.stderr}")
+                        except Exception as e:
+                            self.logger.error(f"Could not retrieve container logs: {e}")
+                        
+                        # Try to get container resource usage at time of failure
+                        try:
+                            stats_result = subprocess.run(
+                                ['docker', 'stats', '--no-stream', '--format', 'table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}', container_id],
+                                capture_output=True, text=True, timeout=10
+                            )
+                            if stats_result.stdout:
+                                self.logger.error(f"Container stats at failure:\n{stats_result.stdout}")
                         except:
                             pass
                         
@@ -643,12 +854,58 @@ class SmartScanner:
                     
                     break
                 
-                # Periodic progress logging for long-running containers
                 current_time = time.time()
+                
+                # Periodic progress logging for long-running containers
                 if current_time - last_log_time > 300:  # Every 5 minutes
                     elapsed = current_time - chunk_start
                     self.logger.info(f"[PROGRESS] {chunk['path']} still running... ({elapsed/60:.1f}min elapsed)")
                     last_log_time = current_time
+                    
+                    # Also log container resource usage
+                    try:
+                        stats_result = subprocess.run(
+                            ['docker', 'stats', '--no-stream', '--format', 'table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}', container_id],
+                            capture_output=True, text=True, timeout=10
+                        )
+                        if stats_result.stdout:
+                            self.logger.info(f"Container resource usage:\n{stats_result.stdout}")
+                    except:
+                        pass
+                
+                # Periodic health checks
+                if current_time - last_health_check > health_check_interval:
+                    self.logger.info(f"[HEALTH CHECK] {chunk['path']} - Running health diagnostics...")
+                    
+                    # Check if container is responsive
+                    try:
+                        health_result = subprocess.run(
+                            ['docker', 'exec', container_id, 'ps', 'aux'],
+                            capture_output=True, text=True, timeout=30
+                        )
+                        if health_result.returncode == 0:
+                            process_count = len(health_result.stdout.strip().split('\n')) - 1
+                            self.logger.info(f"[HEALTH CHECK] Container responsive with {process_count} processes")
+                        else:
+                            self.logger.warning(f"[HEALTH CHECK] Container health check failed: {health_result.stderr}")
+                    except subprocess.TimeoutExpired:
+                        self.logger.warning(f"[HEALTH CHECK] Container health check timed out - may be under heavy load")
+                    except Exception as e:
+                        self.logger.warning(f"[HEALTH CHECK] Container health check error: {e}")
+                    
+                    # Check database activity
+                    try:
+                        self._check_database_activity(chunk)
+                    except Exception as e:
+                        self.logger.warning(f"Database activity check failed: {e}")
+                    
+                    last_health_check = current_time
+                
+                # Check for stalled processes (no database writes for too long)
+                elapsed = current_time - chunk_start
+                if elapsed > stall_timeout:
+                    self.logger.warning(f"[STALL DETECTION] {chunk['path']} has been running for {elapsed/60:.1f} minutes without completion")
+                    self.logger.warning("Consider if this chunk needs manual intervention or the timeout should be increased")
                 
                 time.sleep(10)  # Check every 10 seconds
                 
@@ -690,6 +947,40 @@ class SmartScanner:
         
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
+    
+    def _check_database_activity(self, chunk):
+        """Check database activity for the current chunk"""
+        try:
+            import sqlite3
+            conn = sqlite3.connect(self.db_path, timeout=10)
+            
+            # Count files for this mount point
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM files WHERE mount_point = ?", (chunk['mount_name'],))
+            file_count = cursor.fetchone()[0]
+            
+            # Get total database size
+            cursor.execute("SELECT COUNT(*) FROM files")
+            total_count = cursor.fetchone()[0]
+            
+            # Get recent activity (last 5 minutes)
+            five_min_ago = time.time() - 300
+            cursor.execute("SELECT COUNT(*) FROM files WHERE scan_time > ?", (five_min_ago,))
+            recent_count = cursor.fetchone()[0]
+            
+            conn.close()
+            
+            self.logger.info(f"[DATABASE ACTIVITY] Mount '{chunk['mount_name']}': {file_count:,} files, "
+                           f"Total DB: {total_count:,} files, Recent activity: {recent_count:,} files in last 5min")
+            
+            return {
+                'mount_files': file_count,
+                'total_files': total_count,
+                'recent_activity': recent_count
+            }
+        except Exception as e:
+            self.logger.warning(f"Database activity check failed: {e}")
+            return None
     
     def _estimate_scan_time(self, chunks):
         """Estimate total scan time based on chunk sizes"""
