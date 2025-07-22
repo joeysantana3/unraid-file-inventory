@@ -39,11 +39,14 @@ Intelligent directory chunking scanner that analyzes directory sizes and spawns 
 
 # Limit concurrent containers (default: 8)
 ./run_smart_scan.sh scan /mnt/user/Photos Photos --max-containers 4
+
+# Skip the directory size analysis stage for a faster start
+./run_smart_scan.sh scan /mnt/user/Archive Archive --fast-start
 ```
 
 ## How It Works
 
-1. **Analysis Phase**: Uses `du` to analyze directory sizes
+1. **Analysis Phase**: Uses `du` to analyze directory sizes (can be skipped with `--fast-start`)
 2. **Chunking Logic**: 
    - If directory ≤100GB → scan as single chunk
    - If directory >100GB → recursively analyze subdirectories
