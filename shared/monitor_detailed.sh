@@ -3,9 +3,10 @@
 
 SCAN_DATA_DIR="/mnt/user/appdata/nas-scanner/scan_data"
 DB_PATH="$SCAN_DATA_DIR/nas_catalog.db"
+[ -f "$DB_PATH" ] || DB_PATH="/mnt/user/appdata/nas-scanner-smart/smart_catalog.db"
 
 get_container_pids() {
-    docker ps --filter "name=nas-hp-" --format "{{.Names}}" | while read container; do
+    docker ps --filter "name=nas-hp-" --filter "name=smart-scan-" --format "{{.Names}}" | while read container; do
         echo "Container: $container"
         docker exec "$container" ps aux 2>/dev/null | grep nas_scanner || echo "  No scanner processes found"
         echo ""
@@ -88,7 +89,7 @@ show_process_details() {
 
 show_container_logs() {
     echo "=== RECENT CONTAINER LOGS ==="
-    docker ps --filter "name=nas-hp-" --format "{{.Names}}" | head -3 | while read container; do
+    docker ps --filter "name=nas-hp-" --filter "name=smart-scan-" --format "{{.Names}}" | head -3 | while read container; do
         echo "Last 5 lines from $container:"
         docker logs --tail 5 "$container" 2>/dev/null | sed 's/^/  /'
         echo ""
@@ -105,8 +106,12 @@ main_monitor() {
         
         # Quick container status
         echo "=== CONTAINER OVERVIEW ==="
-        docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.PIDs}}\t{{.BlockIO}}" \
-            $(docker ps --filter "name=nas-hp-" -q) 2>/dev/null || echo "No containers running"
+        containers=$(docker ps --filter "name=nas-hp-" --filter "name=smart-scan-" -q)
+        if [ -n "$containers" ]; then
+            docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.PIDs}}\t{{.BlockIO}}" $containers
+        else
+            echo "No containers running"
+        fi
         echo ""
         
         # Detailed analysis

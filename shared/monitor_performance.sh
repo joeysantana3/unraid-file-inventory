@@ -14,8 +14,12 @@ while true; do
     
     # Container stats
     echo "CONTAINER PERFORMANCE:"
-    docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.PIDs}}" \
-        $(docker ps --filter "name=nas-hp-" -q) 2>/dev/null || echo "No containers running"
+    containers=$(docker ps --filter "name=nas-hp-" --filter "name=smart-scan-" -q)
+    if [ -n "$containers" ]; then
+        docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.PIDs}}" $containers
+    else
+        echo "No scanning containers running"
+    fi
     
     # I/O stats
     echo -e "\nDISK I/O:"
@@ -23,17 +27,25 @@ while true; do
     
     # Database operations per second
     echo -e "\nDATABASE OPERATIONS:"
-    docker run --rm -v /mnt/user/appdata/nas-scanner/scan_data:/data nas-scanner-hp:latest python -c "
-import sqlite3, time
-conn = sqlite3.connect('/data/nas_catalog.db')
-cursor = conn.cursor()
-cursor.execute('SELECT COUNT(*) FROM files')
-count1 = cursor.fetchone()[0]
+    DB_PATH="/mnt/user/appdata/nas-scanner/scan_data/nas_catalog.db"
+    [ -f "$DB_PATH" ] || DB_PATH="/mnt/user/appdata/nas-scanner-smart/smart_catalog.db"
+    if [ -f "$DB_PATH" ]; then
+        docker run --rm -e DB=$(basename "$DB_PATH") -v "$(dirname "$DB_PATH"):/data" nas-scanner-hp:latest python - <<'EOF'
+import os, sqlite3, time
+db=os.path.join('/data', os.environ.get('DB'))
+conn=sqlite3.connect(db)
+cur=conn.cursor()
+cur.execute('SELECT COUNT(*) FROM files')
+c1=cur.fetchone()[0]
 time.sleep(1)
-cursor.execute('SELECT COUNT(*) FROM files')
-count2 = cursor.fetchone()[0]
-print(f'Files/second: {count2-count1:,}')
-" 2>/dev/null || echo "Database not accessible"
+cur.execute('SELECT COUNT(*) FROM files')
+c2=cur.fetchone()[0]
+print(f'Files/second: {c2-c1:,}')
+EOF
+        
+    else
+        echo "Database not accessible"
+    fi
     
     sleep 5
 done 
