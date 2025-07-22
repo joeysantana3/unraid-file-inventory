@@ -185,25 +185,36 @@ EOF
     if [ ! -f "$PROGRESSIVE_DB_PATH" ]; then
         print_status "Creating new database..."
         sqlite3 "$PROGRESSIVE_DB_PATH" << 'SQL'
+CREATE TABLE IF NOT EXISTS files (
+    path TEXT PRIMARY KEY,
+    size INTEGER,
+    mtime REAL,
+    checksum TEXT,
+    mount_point TEXT,
+    file_type TEXT,
+    extension TEXT,
+    scan_time REAL
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS scan_stats (
+    mount_point TEXT PRIMARY KEY,
+    files_scanned INTEGER,
+    bytes_scanned INTEGER,
+    start_time REAL,
+    end_time REAL
+);
+
 CREATE TABLE IF NOT EXISTS scanned_dirs (
     path TEXT PRIMARY KEY,
     mount_point TEXT,
-    scan_time REAL,
-    files_count INTEGER DEFAULT 0,
-    total_size INTEGER DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS files (
-    path TEXT,
-    mount_point TEXT,
-    size INTEGER,
-    mtime REAL,
-    scan_time REAL,
-    PRIMARY KEY (path, mount_point)
-);
+    scan_time REAL
+) WITHOUT ROWID;
 
 CREATE INDEX IF NOT EXISTS idx_mount_point ON files(mount_point);
 CREATE INDEX IF NOT EXISTS idx_scan_time ON files(scan_time);
+CREATE INDEX IF NOT EXISTS idx_checksum ON files(checksum);
+CREATE INDEX IF NOT EXISTS idx_size ON files(size);
+CREATE INDEX IF NOT EXISTS idx_extension ON files(extension);
 SQL
         print_success "Database schema created"
     fi
