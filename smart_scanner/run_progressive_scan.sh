@@ -313,12 +313,12 @@ start_progressive_scan() {
         fi
     fi
     
-    # Record scan start
-    echo "=== Scan started at $(date) ===" >> "$LOG_FILE"
-    echo "Mount: $mount_name ($mount_path)" >> "$LOG_FILE"
-    
-    # Fixed database path for container mounting
-    DATABASE_HOST_DIR="/mnt/user/appdata/nas-scanner"
+         # Record scan start
+     echo "=== Scan started at $(date) ===" >> "$LOG_FILE"
+     echo "Mount: $mount_name ($mount_path)" >> "$LOG_FILE"
+     
+     # Set database host directory to where the database actually is
+     DATABASE_HOST_DIR="$SMART_SCAN_DIR"
     
     # Run the progressive scanner with proper error handling
     print_status "Launching scanner container..."

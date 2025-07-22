@@ -315,11 +315,20 @@ class DatabaseManager:
 def detect_container_environment():
     """Detect if running in Docker and determine host paths"""
     if os.path.exists('/.dockerenv'):
+        # First priority: explicit environment variable
         host_db_dir = os.environ.get('HOST_DB_DIR')
         if host_db_dir:
             return host_db_dir
         
+        # Second priority: try to infer from mounted /data directory
+        # Look for clues about the actual host path structure
         if os.path.exists('/data') and os.access('/data', os.W_OK):
+            # Try to find a progressive_catalog.db file to infer the structure
+            if os.path.exists('/data/progressive_catalog.db'):
+                # Database is directly in /data, so host dir is probably the parent of where we mounted
+                return os.path.dirname(os.path.realpath('/data'))
+            
+            # Generic fallback if we can't determine the specific structure
             return '/mnt/user/appdata/nas-scanner'
     
     return None
